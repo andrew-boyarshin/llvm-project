@@ -390,6 +390,16 @@ if (NOT FUCHSIA)
   )
 endif()
 
+# CBC is a bytecode target: generic C only. emutls is the fiber control
+# block, the personality lives in crt-cbc, and enable_execute_stack would
+# mprotect a page executable.
+set(cbc_SOURCES ${GENERIC_SOURCES} ${GENERIC_TF_SOURCES})
+list(REMOVE_ITEM cbc_SOURCES
+  emutls.c
+  gcc_personality_v0.c
+  enable_execute_stack.c
+)
+
 # These files are used on 32-bit and 64-bit x86.
 set(x86_ARCH_SOURCES
   cpu_model/x86.c

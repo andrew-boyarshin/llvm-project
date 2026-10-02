@@ -55,6 +55,8 @@ add_llvm_component_library(LLVMMC
   MCStreamer.cpp
   MCSFrame.cpp
   MCSPIRVStreamer.cpp
+  MCCBCStreamer.cpp
+  CBCObjectWriter.cpp
   MCSubtargetInfo.cpp
   MCSymbol.cpp
   MCSymbolELF.cpp

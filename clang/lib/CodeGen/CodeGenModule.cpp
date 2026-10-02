@@ -127,6 +127,9 @@ createTargetCodeGenInfo(CodeGenModule &CGM) {
   default:
     return createDefaultTargetCodeGenInfo(CGM);
 
+  case llvm::Triple::cbc:
+    return createCBCTargetCodeGenInfo(CGM);
+
   case llvm::Triple::m68k:
     return createM68kTargetCodeGenInfo(CGM);
   case llvm::Triple::mips:
@@ -7522,6 +7525,7 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   case llvm::Triple::GOFF:
   case llvm::Triple::SPIRV:
   case llvm::Triple::XCOFF:
+  case llvm::Triple::CBC:
     llvm_unreachable("unimplemented");
   case llvm::Triple::COFF:
   case llvm::Triple::ELF:

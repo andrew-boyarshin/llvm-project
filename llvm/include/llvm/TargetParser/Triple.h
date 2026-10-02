@@ -115,7 +115,8 @@ public:
     renderscript32, // 32-bit RenderScript
     renderscript64, // 64-bit RenderScript
     ve,             // NEC SX-Aurora Vector Engine
-    LastArchType = ve
+    cbc,            // CBC bytecode: cbc_x86_64, cbc_aarch64
+    LastArchType = cbc
   };
   enum SubArchType {
     NoSubArch,
@@ -276,7 +277,10 @@ public:
     AMDGPUSubArch13,
     AMDGPUSubArch1310,
     FirstAMDGPUSubArch = AMDGPUSubArch6,
-    LastAMDGPUSubArch = AMDGPUSubArch1310
+    LastAMDGPUSubArch = AMDGPUSubArch1310,
+
+    CBCSubArch_x86_64,
+    CBCSubArch_aarch64,
   };
   enum VendorType {
     UnknownVendor,
@@ -428,6 +432,7 @@ public:
     SPIRV,
     Wasm,
     XCOFF,
+    CBC,
   };
 
 private:
@@ -975,6 +980,15 @@ public:
   }
 
   /// Tests whether the target is SPIR-V (32/64-bit/Logical).
+  bool isCBC() const { return getArch() == Triple::cbc; }
+  bool isCBCHostX86_64() const {
+    return isCBC() && getSubArch() == CBCSubArch_x86_64;
+  }
+  bool isCBCHostAArch64() const {
+    return isCBC() && getSubArch() == CBCSubArch_aarch64;
+  }
+  bool isOSBinFormatCBC() const { return getObjectFormat() == Triple::CBC; }
+
   bool isSPIRV() const {
     return getArch() == Triple::spirv32 || getArch() == Triple::spirv64 ||
            getArch() == Triple::spirv;

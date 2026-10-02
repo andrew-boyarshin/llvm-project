@@ -15,6 +15,10 @@
 #include <exception>        // for std::terminate
 #include <string.h>         // for memset
 #include "cxa_exception.h"
+
+#if defined(__CBC__)
+extern "C" void __cbc_eh_caught(void);
+#endif
 #include "cxa_handlers.h"
 #include "fallback_malloc.h"
 #include "include/atomic_support.h" // from libc++
@@ -451,6 +455,9 @@ to terminate or unexpected during unwinding.
 void*
 __cxa_begin_catch(void* unwind_arg) throw()
 {
+#if defined(__CBC__)
+    __cbc_eh_caught();
+#endif
     _Unwind_Exception* unwind_exception = static_cast<_Unwind_Exception*>(unwind_arg);
     bool native_exception = __isOurExceptionClass(unwind_exception);
     __cxa_eh_globals* globals = __cxa_get_globals();

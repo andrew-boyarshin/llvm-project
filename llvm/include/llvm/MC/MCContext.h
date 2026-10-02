@@ -57,6 +57,7 @@ class MCSectionDXContainer;
 class MCSectionELF;
 class MCSectionMachO;
 class MCSectionSPIRV;
+class MCSectionCBC;
 class MCSectionWasm;
 class MCSectionXCOFF;
 class MCStreamer;
@@ -94,7 +95,8 @@ public:
     IsSPIRV,
     IsWasm,
     IsXCOFF,
-    IsDXContainer
+    IsDXContainer,
+    IsCBC
   };
 
 private:
@@ -145,6 +147,7 @@ private:
   SpecificBumpPtrAllocator<MCSectionMachO> MachOAllocator;
   SpecificBumpPtrAllocator<MCSectionGOFF> GOFFAllocator;
   SpecificBumpPtrAllocator<MCSectionSPIRV> SPIRVAllocator;
+  SpecificBumpPtrAllocator<MCSectionCBC> CBCAllocator;
   SpecificBumpPtrAllocator<MCSectionWasm> WasmAllocator;
   SpecificBumpPtrAllocator<MCSectionXCOFF> XCOFFAllocator;
   SpecificBumpPtrAllocator<MCInst> MCInstAllocator;
@@ -634,6 +637,7 @@ public:
                             unsigned UniqueID = MCSection::NonUniqueID);
 
   LLVM_ABI MCSectionSPIRV *getSPIRVSection();
+  LLVM_ABI MCSectionCBC *getCBCSection();
 
   MCSectionWasm *getWasmSection(const Twine &Section, SectionKind K,
                                 unsigned Flags = 0) {

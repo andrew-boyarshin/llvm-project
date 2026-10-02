@@ -19,6 +19,7 @@
 #include "Targets/ARM.h"
 #include "Targets/AVR.h"
 #include "Targets/BPF.h"
+#include "Targets/CBC.h"
 #include "Targets/CSKY.h"
 #include "Targets/DirectX.h"
 #include "Targets/Hexagon.h"
@@ -790,6 +791,11 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
 
   case llvm::Triple::ve:
     return std::make_unique<LinuxTargetInfo<VETargetInfo>>(Triple, Opts);
+
+  case llvm::Triple::cbc:
+    if (os == llvm::Triple::Linux)
+      return std::make_unique<LinuxTargetInfo<CBCTargetInfo>>(Triple, Opts);
+    return std::make_unique<CBCTargetInfo>(Triple, Opts);
 
   case llvm::Triple::csky:
     switch (os) {

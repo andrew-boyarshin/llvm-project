@@ -238,6 +238,10 @@ macro(test_targets)
   elseif(NOT APPLE) # Supported archs for Apple platforms are generated later
     if(COMPILER_RT_DEFAULT_TARGET_ONLY)
       add_default_target_arch(${COMPILER_RT_DEFAULT_TARGET_ARCH})
+    elseif("${COMPILER_RT_DEFAULT_TARGET_ARCH}" MATCHES "^cbc")
+      # cbc_x86_64 also matches the x86 pattern below. CBC has its own
+      # builtins list and must not build the host x86_64 library.
+      add_default_target_arch(cbc)
     elseif("${COMPILER_RT_DEFAULT_TARGET_ARCH}" MATCHES "i[2-6]86|x86|amd64")
       if(NOT MSVC)
         test_target_arch(x86_64 "" "-m64")

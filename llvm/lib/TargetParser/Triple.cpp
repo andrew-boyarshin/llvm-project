@@ -151,6 +151,8 @@ StringRef Triple::getArchTypeName(ArchType Kind) {
     return "thumbeb";
   case ve:
     return "ve";
+  case cbc:
+    return "cbc";
   case wasm32:
     return "wasm32";
   case wasm64:
@@ -249,6 +251,12 @@ StringRef Triple::getArchName(ArchType Kind, SubArchType SubArch) {
     break;
   case Triple::amdgpu:
     return AMDGPU::getSubArchName(SubArch);
+  case Triple::cbc:
+    if (SubArch == CBCSubArch_x86_64)
+      return "cbc_x86_64";
+    if (SubArch == CBCSubArch_aarch64)
+      return "cbc_aarch64";
+    break;
   default:
     break;
   }
@@ -361,6 +369,8 @@ StringRef Triple::getArchTypePrefix(ArchType Kind) {
 
   case ve:
     return "ve";
+  case cbc:
+    return "cbc";
   case csky:
     return "csky";
 
@@ -435,6 +445,8 @@ StringRef Triple::getObjectFormatTypeName(ObjectFormatType Kind) {
     return "dxcontainer";
   case SPIRV:
     return "spirv";
+  case CBC:
+    return "cbc";
   }
   llvm_unreachable("unknown object format type");
 }
@@ -466,6 +478,7 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
       .Case("arm", arm)
       .Case("armeb", armeb)
       .Case("avr", avr)
+      .Case("cbc", cbc)
       .StartsWith("bpf", BPFArch)
       .Case("m68k", m68k)
       .Case("mips", mips)
@@ -672,6 +685,7 @@ Triple::ArchType Triple::parseArch(StringRef ArchName) {
           .Case("ve", Triple::ve)
           .Case("wasm32", Triple::wasm32)
           .Case("wasm64", Triple::wasm64)
+          .Cases({"cbc", "cbc_x86_64", "cbc_aarch64"}, Triple::cbc)
           .Case("csky", Triple::csky)
           .Case("loongarch32", Triple::loongarch32)
           .Case("loongarch64", Triple::loongarch64)
@@ -753,6 +767,11 @@ Triple::SubArchType Triple::parseSubArch(StringRef SubArchName) {
 
   if (SubArchName == "x86_64_lfi")
     return Triple::X86_64SubArch_lfi;
+
+  if (SubArchName == "cbc_x86_64")
+    return Triple::CBCSubArch_x86_64;
+  if (SubArchName == "cbc_aarch64")
+    return Triple::CBCSubArch_aarch64;
 
   if (SubArchName.starts_with("spirv"))
     return StringSwitch<Triple::SubArchType>(SubArchName)
@@ -1031,6 +1050,9 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
   case Triple::wasm32:
   case Triple::wasm64:
     return Triple::Wasm;
+
+  case Triple::cbc:
+    return Triple::CBC;
 
   case Triple::spirv:
   case Triple::spirv32:
@@ -1801,6 +1823,7 @@ unsigned Triple::getArchPointerBitWidth(llvm::Triple::ArchType Arch) {
   case llvm::Triple::ve:
   case llvm::Triple::wasm64:
   case llvm::Triple::x86_64:
+  case llvm::Triple::cbc:
     return 64;
   }
   llvm_unreachable("Invalid architecture value");
@@ -1847,6 +1870,7 @@ Triple Triple::get32BitArchVariant() const {
   case Triple::msp430:
   case Triple::systemz:
   case Triple::ve:
+  case Triple::cbc:
     T.setArch(UnknownArch);
     break;
 
@@ -1996,6 +2020,7 @@ Triple Triple::get64BitArchVariant() const {
   case Triple::ve:
   case Triple::wasm64:
   case Triple::x86_64:
+  case Triple::cbc:
     // Already 64-bit.
     break;
 
@@ -2109,6 +2134,7 @@ Triple Triple::getBigEndianArchVariant() const {
   case Triple::ve:
   case Triple::csky:
   case Triple::xtensa:
+  case Triple::cbc:
 
   // ARM is intentionally unsupported here, changing the architecture would
   // drop any arch suffixes.
@@ -2255,6 +2281,7 @@ bool Triple::isLittleEndian() const {
   case Triple::x86_64:
   case Triple::xcore:
   case Triple::xtensa:
+  case Triple::cbc:
     return true;
   default:
     return false;
@@ -2469,6 +2496,8 @@ bool Triple::isValidVersionForOS(OSType OSKind, const VersionTuple &Version) {
 }
 
 ExceptionHandling Triple::getDefaultExceptionHandling() const {
+  if (isCBC())
+    return ExceptionHandling::Wasm;
   if (isOSBinFormatCOFF()) {
     if (getArch() == Triple::x86 &&
         (isOSCygMing() || isWindowsItaniumEnvironment()))

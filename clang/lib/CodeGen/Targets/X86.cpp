@@ -3742,6 +3742,10 @@ CodeGen::createX86_64TargetCodeGenInfo(CodeGenModule &CGM,
   return std::make_unique<X86_64TargetCodeGenInfo>(CGM.getTypes(), AVXLevel);
 }
 
+std::unique_ptr<ABIInfo> CodeGen::createX86_64SysVABIInfo(CodeGenTypes &CGT) {
+  return std::make_unique<X86_64ABIInfo>(CGT, X86AVXABILevel::None);
+}
+
 std::unique_ptr<TargetCodeGenInfo>
 CodeGen::createWinX86_64TargetCodeGenInfo(CodeGenModule &CGM,
                                           X86AVXABILevel AVXLevel) {

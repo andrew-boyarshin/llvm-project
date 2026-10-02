@@ -25,6 +25,7 @@
 #include "llvm/MC/MCSectionSPIRV.h"
 #include "llvm/MC/MCSectionWasm.h"
 #include "llvm/MC/MCSectionXCOFF.h"
+#include "llvm/MC/MCSectionCBC.h"
 #include "llvm/MC/MCSymbolGOFF.h"
 #include "llvm/MC/SectionKind.h"
 #include "llvm/TargetParser/Triple.h"
@@ -1225,6 +1226,9 @@ void MCObjectFileInfo::initMCObjectFileInfo(MCContext &MCCtx, bool PIC,
   case MCContext::IsDXContainer:
     initDXContainerObjectFileInfo(TheTriple);
     break;
+  case MCContext::IsCBC:
+    TextSection = Ctx->getCBCSection();
+    break;
   }
 }
 
@@ -1243,6 +1247,7 @@ MCSection *MCObjectFileInfo::getDwarfComdatSection(const char *Name,
   case Triple::SPIRV:
   case Triple::XCOFF:
   case Triple::DXContainer:
+  case Triple::CBC:
   case Triple::UnknownObjectFormat:
     report_fatal_error("Cannot get DWARF comdat section for this object file "
                        "format: not implemented.");

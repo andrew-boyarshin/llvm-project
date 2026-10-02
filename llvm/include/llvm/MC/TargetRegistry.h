@@ -110,6 +110,10 @@ LLVM_ABI MCStreamer *createWasmStreamer(MCContext &Ctx,
                                         std::unique_ptr<MCAsmBackend> &&TAB,
                                         std::unique_ptr<MCObjectWriter> &&OW,
                                         std::unique_ptr<MCCodeEmitter> &&CE);
+LLVM_ABI MCStreamer *createCBCStreamer(MCContext &Ctx,
+                                      std::unique_ptr<MCAsmBackend> &&TAB,
+                                      std::unique_ptr<MCObjectWriter> &&OW,
+                                      std::unique_ptr<MCCodeEmitter> &&CE);
 LLVM_ABI MCStreamer *createSPIRVStreamer(MCContext &Ctx,
                                          std::unique_ptr<MCAsmBackend> &&TAB,
                                          std::unique_ptr<MCObjectWriter> &&OW,

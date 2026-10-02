@@ -60,6 +60,20 @@ option(LIBCXXABI_ENABLE_EXCEPTIONS
 option(LIBCXXABI_ENABLE_ASSERTIONS "Enable assertions independent of build mode." ON)
 option(LIBCXXABI_ENABLE_PEDANTIC "Compile with pedantic enabled." OFF)
 option(LIBCXXABI_ENABLE_WERROR "Fail and stop if a warning is triggered." OFF)
+# A CBC target has no libunwind. An explicit ON is rejected; the default ON
+# is forced off so the "libunwind is not in LLVM_ENABLE_RUNTIMES" check does
+# not fire. See agents/14-libcxx.md.
+if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+  if (DEFINED LIBCXXABI_USE_LLVM_UNWINDER AND LIBCXXABI_USE_LLVM_UNWINDER)
+    message(FATAL_ERROR
+      "CBC does not use libunwind (agents/14-libcxx.md). "
+      "Do not set LIBCXXABI_USE_LLVM_UNWINDER=ON.")
+  endif()
+  set(LIBCXXABI_USE_LLVM_UNWINDER OFF CACHE BOOL
+      "CBC has no libunwind." FORCE)
+  set(LIBCXXABI_USE_COMPILER_RT ON CACHE BOOL
+      "CBC uses compiler-rt builtins." FORCE)
+endif()
 option(LIBCXXABI_USE_LLVM_UNWINDER "Build and use the LLVM unwinder." ON)
 if (LIBCXXABI_USE_LLVM_UNWINDER AND NOT "libunwind" IN_LIST LLVM_ENABLE_RUNTIMES)
   message(FATAL_ERROR "LIBCXXABI_USE_LLVM_UNWINDER is set to ON, but libunwind is not specified in LLVM_ENABLE_RUNTIMES.")

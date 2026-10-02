@@ -4,6 +4,13 @@ include(CheckCCompilerFlag)
 include(CheckCXXCompilerFlag)
 include(CheckCSourceCompiles)
 
+if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+  # Do not probe host libgcc / libgcc_s. cbc-ld supplies compiler-rt and the
+  # crt unwind entry points.
+  set(LIBCXXABI_HAS_C_LIB OFF)
+  set(LIBCXXABI_HAS_GCC_LIB OFF)
+  set(LIBCXXABI_HAS_GCC_S_LIB OFF)
+else()
 check_library_exists(c fopen "" LIBCXXABI_HAS_C_LIB)
 if (NOT LIBCXXABI_USE_COMPILER_RT)
   if (ANDROID)
@@ -12,6 +19,7 @@ if (NOT LIBCXXABI_USE_COMPILER_RT)
     check_library_exists(gcc_s __gcc_personality_v0 "" LIBCXXABI_HAS_GCC_S_LIB)
     check_library_exists(gcc __aeabi_uldivmod "" LIBCXXABI_HAS_GCC_LIB)
   endif ()
+endif ()
 endif ()
 
 # libc++abi is using -nostdlib++ at the link step when available,

@@ -28,6 +28,7 @@
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionGOFF.h"
 #include "llvm/MC/MCSectionMachO.h"
+#include "llvm/MC/MCSectionCBC.h"
 #include "llvm/MC/MCSectionSPIRV.h"
 #include "llvm/MC/MCSectionWasm.h"
 #include "llvm/MC/MCSectionXCOFF.h"
@@ -111,6 +112,9 @@ MCContext::MCContext(const Triple &TheTriple, const MCAsmInfo &mai,
     break;
   case Triple::SPIRV:
     Env = IsSPIRV;
+    break;
+  case Triple::CBC:
+    Env = IsCBC;
     break;
   case Triple::UnknownObjectFormat:
     report_fatal_error("Cannot initialize MC for unknown object file format.");
@@ -305,6 +309,7 @@ MCSymbol *MCContext::createSymbolImpl(const MCSymbolTableEntry *Name,
   case MCContext::IsDXContainer:
     break;
   case MCContext::IsSPIRV:
+  case MCContext::IsCBC:
     return new (Name, *this) MCSymbol(Name, IsTemporary);
   }
   return new (Name, *this) MCSymbol(Name, IsTemporary);
@@ -927,6 +932,10 @@ MCSectionXCOFF *MCContext::getXCOFFSection(
 MCSectionSPIRV *MCContext::getSPIRVSection() {
   MCSectionSPIRV *Result = new (SPIRVAllocator.Allocate()) MCSectionSPIRV();
   return Result;
+}
+
+MCSectionCBC *MCContext::getCBCSection() {
+  return new (CBCAllocator.Allocate()) MCSectionCBC();
 }
 
 MCSectionDXContainer *MCContext::getDXContainerSection(StringRef Section,

@@ -314,6 +314,17 @@ endif()
 # Feature options -------------------------------------------------------------
 option(LIBCXX_HAS_MUSL_LIBC "Build libc++ with support for the Musl C library" OFF)
 option(LIBCXX_HAS_PTHREAD_API "Ignore auto-detection and force use of pthread API" OFF)
+if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+  if (LIBCXX_HAS_PTHREAD_API)
+    message(FATAL_ERROR
+      "LIBCXX_HAS_PTHREAD_API is not supported on CBC "
+      "(agents/15-threads.md). pthread_key_create would register a CBC destructor.")
+  endif()
+  set(LIBCXX_ENABLE_ABI_LINKER_SCRIPT OFF CACHE BOOL
+      "cbc-ld is not a GNU linker." FORCE)
+  set(LIBCXX_USE_COMPILER_RT ON CACHE BOOL
+      "CBC uses compiler-rt builtins." FORCE)
+endif()
 option(LIBCXX_HAS_WIN32_THREAD_API "Ignore auto-detection and force use of win32 thread API" OFF)
 option(LIBCXX_HAS_EXTERNAL_THREAD_API
   "Build libc++ with an externalized threading API.

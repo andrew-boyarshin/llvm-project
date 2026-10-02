@@ -684,6 +684,10 @@ std::string Triple::computeDataLayout(StringRef ABIName) const {
   case Triple::wasm32:
   case Triple::wasm64:
     return computeWebAssemblyDataLayout(*this);
+  case Triple::cbc:
+    if (getSubArch() == Triple::CBCSubArch_aarch64)
+      return "e-m:e-p:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128";
+    return "e-m:e-p:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128";
   case Triple::ve:
     return computeVEDataLayout(*this);
 

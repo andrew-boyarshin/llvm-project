@@ -104,7 +104,11 @@ endif()
 check_symbol_exists(__PICOLIBC__ "string.h" PICOLIBC)
 
 # Check libraries
-if(WIN32 AND NOT MINGW)
+if(CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+  set(LIBCXX_HAS_PTHREAD_LIB NO)
+  set(LIBCXX_HAS_RT_LIB NO)
+  set(LIBCXX_HAS_ATOMIC_LIB NO)
+elseif(WIN32 AND NOT MINGW)
   # TODO(compnerd) do we want to support an emulation layer that allows for the
   # use of pthread-win32 or similar libraries to emulate pthreads on Windows?
   set(LIBCXX_HAS_PTHREAD_LIB NO)

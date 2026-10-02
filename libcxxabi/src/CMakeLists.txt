@@ -4,7 +4,6 @@ set(LIBCXXABI_SOURCES
   cxa_aux_runtime.cpp
   cxa_default_handlers.cpp
   cxa_demangle.cpp
-  cxa_exception_storage.cpp
   cxa_guard.cpp
   cxa_handlers.cpp
   cxa_vector.cpp
@@ -19,6 +18,15 @@ set(LIBCXXABI_SOURCES
   private_typeinfo.cpp
 )
 
+if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+  list(APPEND LIBCXXABI_SOURCES
+    cbc_eh_select.cpp
+    cbc_exception_storage.cpp
+  )
+else()
+  list(APPEND LIBCXXABI_SOURCES cxa_exception_storage.cpp)
+endif()
+
 if (LIBCXXABI_ENABLE_NEW_DELETE_DEFINITIONS)
   list(APPEND LIBCXXABI_SOURCES
     stdlib_new_delete.cpp
@@ -26,10 +34,10 @@ if (LIBCXXABI_ENABLE_NEW_DELETE_DEFINITIONS)
 endif()
 
 if (LIBCXXABI_ENABLE_EXCEPTIONS)
-  list(APPEND LIBCXXABI_SOURCES
-    cxa_exception.cpp
-    cxa_personality.cpp
-  )
+  list(APPEND LIBCXXABI_SOURCES cxa_exception.cpp)
+  if (NOT CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+    list(APPEND LIBCXXABI_SOURCES cxa_personality.cpp)
+  endif()
 else()
   list(APPEND LIBCXXABI_SOURCES
     cxa_noexception.cpp
@@ -37,7 +45,8 @@ else()
 endif()
 
 if (LIBCXXABI_ENABLE_THREADS AND (UNIX OR FUCHSIA) AND NOT (APPLE OR CYGWIN)
-    AND NOT ("${CMAKE_SYSTEM_NAME}" MATCHES "AIX"))
+    AND NOT ("${CMAKE_SYSTEM_NAME}" MATCHES "AIX")
+    AND NOT CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
   list(APPEND LIBCXXABI_SOURCES
     cxa_thread_atexit.cpp
   )

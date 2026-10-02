@@ -90,6 +90,9 @@ MCStreamer *Target::createMCObjectStreamer(
     S = createDXContainerStreamer(Ctx, std::move(TAB), std::move(OW),
                                   std::move(Emitter));
     break;
+  case Triple::CBC:
+    S = createCBCStreamer(Ctx, std::move(TAB), std::move(OW), std::move(Emitter));
+    break;
   }
   if (ObjectTargetStreamerCtorFn)
     ObjectTargetStreamerCtorFn(*S, STI);

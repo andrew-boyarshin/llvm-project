@@ -111,7 +111,7 @@ set(ALL_BUILTIN_SUPPORTED_ARCH
   ${X86} ${X86_64} ${AMDGPU} ${ARM32} ${ARM64} ${AVR}
   ${HEXAGON} ${MIPS32} ${MIPS64} ${NVPTX} ${PPC32} ${PPC64}
   ${RISCV32} ${RISCV64} ${S390X} ${SPARC} ${SPARCV9} ${SPIRV64}
-  ${WASM32} ${WASM64} ${VE} ${LOONGARCH64} ${M68K})
+  ${WASM32} ${WASM64} ${VE} ${LOONGARCH64} ${M68K} cbc)
 
 include(CompilerRTUtils)
 include(CompilerRTDarwinUtils)
@@ -272,6 +272,12 @@ if(APPLE)
   list_intersect(BUILTIN_SUPPORTED_ARCH ALL_BUILTIN_SUPPORTED_ARCH COMPILER_RT_SUPPORTED_ARCH)
 
 else()
+  if (CMAKE_C_COMPILER_TARGET MATCHES "^cbc")
+    # A CBC compile does not produce a host executable, so the usual
+    # try_compile arch probe cannot succeed. The generic C builtins are
+    # still buildable.
+    add_default_target_arch(cbc)
+  endif()
   # If we're not building the builtins standalone, just rely on the  tests in
   # config-ix.cmake to tell us what to build. Otherwise we need to do some leg
   # work here...
@@ -301,6 +307,10 @@ if(OS_NAME MATCHES "Linux|SerenityOS" AND NOT LLVM_USE_SANITIZER AND NOT
    COMPILER_RT_GPU_BUILD)
   set(COMPILER_RT_HAS_CRT TRUE)
 else()
+  set(COMPILER_RT_HAS_CRT FALSE)
+endif()
+if (CMAKE_C_COMPILER_TARGET MATCHES "^cbc")
+  # crtbegin.c is ELF assembly. CBC has no .init_array.
   set(COMPILER_RT_HAS_CRT FALSE)
 endif()
 

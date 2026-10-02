@@ -49,6 +49,7 @@
 #include "ToolChains/Solaris.h"
 #include "ToolChains/TCE.h"
 #include "ToolChains/UEFI.h"
+#include "ToolChains/CBC.h"
 #include "ToolChains/VEToolchain.h"
 #include "ToolChains/WebAssembly.h"
 #include "ToolChains/XCore.h"
@@ -5439,6 +5440,8 @@ InputInfoList Driver::BuildJobsForActionNoCache(
 
 const char *Driver::getDefaultImageName() const {
   llvm::Triple Target(llvm::Triple::normalize(TargetTriple));
+  if (Target.getArch() == llvm::Triple::cbc)
+    return "a.cbc";
   return Target.isOSWindows() ? "a.exe" : "a.out";
 }
 
@@ -6196,6 +6199,8 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
                                                               Args);
       else if (Target.getArch() == llvm::Triple::ve)
         TC = std::make_unique<toolchains::VEToolChain>(*this, Target, Args);
+      else if (Target.getArch() == llvm::Triple::cbc)
+        TC = std::make_unique<toolchains::CBCToolChain>(*this, Target, Args);
       else if (Target.isOHOSFamily())
         TC = std::make_unique<toolchains::OHOS>(*this, Target, Args);
       else if (Target.isWALI())

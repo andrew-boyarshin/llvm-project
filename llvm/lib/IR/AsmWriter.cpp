@@ -448,6 +448,12 @@ static void printCallingConv(unsigned cc, raw_ostream &Out) {
   case CallingConv::CHERIoT_LibraryCall:
     Out << "cheriot_librarycallcc";
     break;
+  case CallingConv::CBC_Native:
+    Out << "cbc_nativecc";
+    break;
+  case CallingConv::CBC_Entry:
+    Out << "cbc_entrycc";
+    break;
   }
 }
 

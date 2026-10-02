@@ -63,6 +63,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/NVPTXAddrSpace.h"
+#include <algorithm>
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -126,6 +127,16 @@ public:
     bool Indirect;   // Passed via a pointer
   };
   virtual VAArgSlotInfo slotInfo(const DataLayout &DL, Type *Parameter) = 0;
+
+  // x86-64 va_arg reads a register-save area when gp/fp offsets are not
+  // already past the end. CBC uses that layout so coerced aggregates land
+  // in the same slots va_arg reads.
+  virtual bool hasRegisterSaveArea() const { return false; }
+  virtual void resetRegisterSave() {}
+  virtual uint64_t assignRegisterSaveSlot(const DataLayout &, Type *, bool,
+                                          uint64_t &) {
+    return 0;
+  }
 
   // Targets implemented so far all have the same trivial lowering for these
   bool vaEndIsNop() { return true; }
@@ -282,10 +293,8 @@ public:
       return true;
     }
 
-    if (isa<InvokeInst>(CB)) {
-      // Invoke not implemented in initial implementation of pass
-      return false;
-    }
+    if (InvokeInst *II = dyn_cast<InvokeInst>(CB))
+      return isValidCallingConv(II);
 
     // Other unimplemented derivative of CallBase
     return false;
@@ -663,6 +672,60 @@ bool ExpandVariadics::expandCall(Module &M, IRBuilder<> &Builder, CallBase *CB,
       return Changed;
 
   auto &Ctx = CB->getContext();
+  Function *CBF = CB->getParent()->getParent();
+
+  AllocaInst *Alloced = nullptr;
+  if (ABI->hasRegisterSaveArea()) {
+    auto &DLSave = DL;
+    ABI->resetRegisterSave();
+    struct Saved {
+      uint64_t Off;
+      Type *Ty;
+      Value *Src;
+      bool Memcpy;
+      uint64_t CopySize;
+    };
+    SmallVector<Saved, 8> SavedArgs;
+    uint64_t BufSize = 176;
+    const unsigned NumVar =
+        CB->arg_size() - VarargFunctionType->getNumParams();
+    (void)NumVar;
+    for (unsigned I :
+         seq(VarargFunctionType->getNumParams(), CB->arg_size())) {
+      Value *ArgVal = CB->getArgOperand(I);
+      const bool IsByVal = CB->paramHasAttr(I, Attribute::ByVal);
+      const bool IsByRef = CB->paramHasAttr(I, Attribute::ByRef);
+      Type *Underlying = IsByVal   ? CB->getParamByValType(I)
+                         : IsByRef ? CB->getParamByRefType(I)
+                                   : ArgVal->getType();
+      uint64_t Off = ABI->assignRegisterSaveSlot(DLSave, Underlying,
+                                                 IsByVal || IsByRef, BufSize);
+      uint64_t CopySize = DLSave.getTypeAllocSize(Underlying).getFixedValue();
+      SavedArgs.push_back(
+          {Off, Underlying, ArgVal, IsByVal || IsByRef, CopySize});
+    }
+    Builder.SetInsertPointPastAllocas(CBF);
+    Builder.SetCurrentDebugLocation(CB->getStableDebugLoc());
+    Alloced = Builder.CreateAlloca(Builder.getInt8Ty(),
+                                   Builder.getInt64(BufSize), "vararg_buffer");
+    // The CBC stack pointer is only 16-byte aligned. Claiming 32 here makes
+    // SelectionDAG treat base+16 as base|16, which stores the terminating
+    // null on top of the first slot whenever SP is 16 (mod 32).
+    Alloced->setAlignment(Align(16));
+    Changed = true;
+    Builder.SetInsertPoint(CB);
+    Builder.CreateLifetimeStart(Alloced);
+    for (const Saved &S : SavedArgs) {
+      Value *Dst = Builder.CreateInBoundsGEP(Builder.getInt8Ty(), Alloced,
+                                             Builder.getInt64(S.Off));
+      if (S.Memcpy)
+        Builder.CreateMemCpy(Dst, Align(1), S.Src, {}, S.CopySize);
+      else
+        Builder.CreateAlignedStore(
+            S.Src, Builder.CreateBitCast(Dst, Builder.getPtrTy()),
+            DLSave.getABITypeAlign(S.Ty));
+    }
+  } else {
 
   Align MaxFieldAlign(1);
 
@@ -671,8 +734,6 @@ bool ExpandVariadics::expandCall(Module &M, IRBuilder<> &Builder, CallBase *CB,
   // with it, such that target specific va_arg instructions will correctly
   // iterate over it. This means getting the alignment right and sometimes
   // embedding a pointer to the value instead of embedding the value itself.
-
-  Function *CBF = CB->getParent()->getParent();
 
   ExpandedCallFrame Frame;
 
@@ -772,7 +833,7 @@ bool ExpandVariadics::expandCall(Module &M, IRBuilder<> &Builder, CallBase *CB,
   Builder.SetCurrentDebugLocation(CB->getStableDebugLoc());
 
   // The awkward construction here is to set the alignment on the instance
-  AllocaInst *Alloced = Builder.Insert(
+  Alloced = Builder.Insert(
       new AllocaInst(VarargsTy, DL.getAllocaAddrSpace(), nullptr, AllocaAlign),
       "vararg_buffer");
   Changed = true;
@@ -782,6 +843,7 @@ bool ExpandVariadics::expandCall(Module &M, IRBuilder<> &Builder, CallBase *CB,
   Builder.SetInsertPoint(CB);
   Builder.CreateLifetimeStart(Alloced);
   Frame.initializeStructAlloca(DL, Builder, Alloced, VarargsTy);
+  }
 
   const unsigned NumArgs = VarargFunctionType->getNumParams();
   SmallVector<Value *> Args(CB->arg_begin(), CB->arg_begin() + NumArgs);
@@ -834,6 +896,13 @@ bool ExpandVariadics::expandCall(Module &M, IRBuilder<> &Builder, CallBase *CB,
       TCK = CallInst::TCK_None;
     CI->setTailCallKind(TCK);
 
+  } else if (InvokeInst *II = dyn_cast<InvokeInst>(CB)) {
+    Value *Dst = NF ? NF : II->getCalledOperand();
+    FunctionType *NFTy =
+        inlinableVariadicFunctionType(M, VarargFunctionType, CB->getType());
+    NewCB = InvokeInst::Create(NFTy, Dst, II->getNormalDest(),
+                               II->getUnwindDest(), Args, OpBundles, "",
+                               II->getIterator());
   } else {
     llvm_unreachable("Unreachable when !expansionApplicableToFunctionCall()");
   }
@@ -852,6 +921,8 @@ bool ExpandVariadics::expandCall(Module &M, IRBuilder<> &Builder, CallBase *CB,
   NewCB->copyProfileAndDebugMetadata(*CB);
 
   CB->replaceAllUsesWith(NewCB);
+  if (auto *NewII = dyn_cast<InvokeInst>(NewCB))
+    NewII->moveBefore(CB->getIterator());
   CB->eraseFromParent();
   return Changed;
 }
@@ -1085,6 +1156,133 @@ struct SPIRV final : public VariadicABIInfo {
   }
 };
 
+struct CBC final : public VariadicABIInfo {
+  bool enableForTarget() override { return true; }
+
+  // The host va_list is a struct. Callers pass a pointer to it.
+  bool vaListPassedInSSARegister() override { return false; }
+
+  Type *vaListType(LLVMContext &Ctx) override {
+    Type *I32 = Type::getInt32Ty(Ctx);
+    Type *Ptr = PointerType::getUnqual(Ctx);
+    Type *Tag = StructType::get(Ctx, {I32, I32, Ptr, Ptr});
+    return ArrayType::get(Tag, 1);
+  }
+
+  Type *vaListParameterType(Module &M) override {
+    return PointerType::getUnqual(M.getContext());
+  }
+
+  Value *initializeVaList(Module &, LLVMContext &, IRBuilder<> &Builder,
+                          AllocaInst *VaList, Value *Buffer) override {
+    // Registers are exhausted; every variadic argument is read from Buffer.
+    // x86-64 SysV: gp_offset past the six integer slots, fp_offset past the
+    // eight xmm slots.
+    // clang's va_list is [1 x {i32,i32,ptr,ptr}]. GEP {0, N} on the array
+    // type indexes array elements, not struct fields — peel the array first.
+    Type *VaTy = VaList->getAllocatedType();
+    Value *Tag = VaList;
+    Type *TagTy = VaTy;
+    if (auto *AT = dyn_cast<ArrayType>(VaTy)) {
+      TagTy = AT->getElementType();
+      Tag = Builder.CreateConstInBoundsGEP2_32(VaTy, VaList, 0, 0);
+    }
+    auto Field = [&](unsigned Idx) {
+      return Builder.CreateConstInBoundsGEP2_32(TagTy, Tag, 0, Idx);
+    };
+    // Named arguments are not in this buffer, so the first variadic integer
+    // is GP slot 0 and the first variadic double is FP slot 0 (byte 48).
+    // Overflow starts at byte 176, after the 6 GP and 8 FP slots.
+    Builder.CreateStore(Builder.getInt32(0), Field(0));
+    Builder.CreateStore(Builder.getInt32(48), Field(1));
+    Value *Overflow = Builder.CreateInBoundsGEP(
+        Builder.getInt8Ty(), Buffer, Builder.getInt64(176), "overflow");
+    Builder.CreateStore(Overflow, Field(2));
+    Builder.CreateStore(Buffer, Field(3));
+    return VaList;
+  }
+
+  bool hasRegisterSaveArea() const override { return true; }
+
+  unsigned NextGP = 0;
+  unsigned NextFP = 0;
+  uint64_t NextOverflow = 176;
+
+  void resetRegisterSave() override {
+    NextGP = 0;
+    NextFP = 0;
+    NextOverflow = 176;
+  }
+
+  uint64_t assignRegisterSaveSlot(const DataLayout &DL, Type *Ty, bool ByVal,
+                                  uint64_t &BufSize) override {
+    auto finish = [&](uint64_t Off, uint64_t Span) {
+      BufSize = std::max(BufSize, Off + Span);
+      return Off;
+    };
+    // Aggregates are the in-memory image. va_arg copies that image from the
+    // overflow area; it does not load a pointer.
+    if (ByVal || Ty->isAggregateType()) {
+      uint64_t A = std::max(DL.getABITypeAlign(Ty).value(), uint64_t{8});
+      NextOverflow = (NextOverflow + A - 1) & ~(A - 1);
+      uint64_t Off = NextOverflow;
+      uint64_t Sz = DL.getTypeAllocSize(Ty).getFixedValue();
+      uint64_t Step = (Sz + 7) & ~uint64_t{7};
+      NextOverflow += Step;
+      return finish(Off, Step);
+    }
+    if (Ty->isFloatingPointTy() ||
+        (Ty->isVectorTy() &&
+         DL.getTypeAllocSize(Ty).getFixedValue() <= 16)) {
+      if (NextFP < 8) {
+        uint64_t Off = 48 + NextFP * 16;
+        ++NextFP;
+        return finish(Off, 16);
+      }
+      NextOverflow = (NextOverflow + 7) & ~uint64_t{7};
+      uint64_t Off = NextOverflow;
+      NextOverflow += 8;
+      return finish(Off, 8);
+    }
+    unsigned Slots = 1;
+    if (Ty->isIntegerTy())
+      Slots = std::max<unsigned>(1, (Ty->getIntegerBitWidth() + 63) / 64);
+    // An argument that does not fit in the remaining GP slots goes entirely
+    // to overflow. The leftover GP slots stay available for a later argument.
+    if (NextGP + Slots <= 6) {
+      uint64_t Off = NextGP * 8;
+      NextGP += Slots;
+      return finish(Off, Slots * 8);
+    }
+    uint64_t A = Slots > 1 ? 16 : 8;
+    NextOverflow = (NextOverflow + A - 1) & ~(A - 1);
+    uint64_t Off = NextOverflow;
+    NextOverflow += Slots * 8;
+    return finish(Off, Slots * 8);
+  }
+
+  VAArgSlotInfo slotInfo(const DataLayout &DL, Type *Parameter) override {
+    Align A = DL.getABITypeAlign(Parameter);
+    if (A < Align(8))
+      A = Align(8);
+    if (A > Align(16))
+      A = Align(16);
+    bool Indirect = false;
+    if (auto *S = dyn_cast<StructType>(Parameter))
+      if (DL.getTypeAllocSize(S).getFixedValue() > 16)
+        Indirect = true;
+    return {A, Indirect};
+  }
+
+  bool ignoreFunction(const Function *F) override {
+    // Declarations are native functions and keep the host variadic convention.
+    // An indirect call has no callee to rewrite. Leaving it in the host
+    // convention lets a pointer to sprintf pass a double in a float register.
+    // Direct calls to CBC variadic definitions are still expanded.
+    return !F || F->isDeclaration();
+  }
+};
+
 struct Wasm final : public VariadicABIInfo {
 
   bool enableForTarget() override {
@@ -1145,6 +1343,9 @@ std::unique_ptr<VariadicABIInfo> VariadicABIInfo::create(const Triple &T) {
   case Triple::spirv64: {
     return std::make_unique<SPIRV>();
   }
+
+  case Triple::cbc:
+    return std::make_unique<CBC>();
 
   default:
     return {};

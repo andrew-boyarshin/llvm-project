@@ -1,0 +1,5 @@
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export BUILD="$ROOT/build-release"
+export PREFIX="$ROOT/build-install-release"
+export RUNTIME_BUILD="$ROOT/build-cbc-runtimes-release"
+export BUILD_TYPE="RelWithDebInfo"

@@ -763,6 +763,10 @@ extern cl::opt<unsigned> AsmMacroMaxNestingDepth;
 
 } // end namespace llvm
 
+namespace {
+struct CBCPlatformAsmParser : public MCAsmParserExtension {};
+} // namespace
+
 AsmParser::AsmParser(SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
                      const MCAsmInfo &MAI, unsigned CB = 0)
     : MCAsmParser(Ctx, Out, SM, MAI), CurBuffer(CB ? CB : SM.getMainFileID()),
@@ -804,6 +808,9 @@ AsmParser::AsmParser(SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
     break;
   case MCContext::IsDXContainer:
     report_fatal_error("DXContainer is not supported yet");
+    break;
+  case MCContext::IsCBC:
+    PlatformParser.reset(new CBCPlatformAsmParser());
     break;
   }
 
