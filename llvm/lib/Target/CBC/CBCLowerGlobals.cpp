@@ -336,10 +336,16 @@ bool CBCLowerGlobalsLegacy::runOnModule(Module &M) {
   for (GlobalVariable &GV : M.globals()) {
     if (!GV.isDeclaration() || GV.use_empty() || GV.getName().starts_with("llvm."))
       continue;
+    // Always cache a pointer. Externals like `chtype acs_map[]` are `[0 x T]`
+    // (alloc size 0, align of T); using that type left the cache short/unaligned
+    // so the helper's 64-bit load read past the data image and treated heap
+    // garbage as a hit, skipping dlsym.
+    Type *CacheTy = PointerType::get(Ctx, 0);
     GlobalVariable *Cache = new GlobalVariable(
-        M, GV.getValueType(), false, GlobalValue::InternalLinkage,
-        Constant::getNullValue(GV.getValueType()),
+        M, CacheTy, false, GlobalValue::InternalLinkage,
+        Constant::getNullValue(CacheTy),
         "__cbc_dlcache_" + symbolKey(GV.getName()));
+    Cache->setAlignment(DL.getABITypeAlign(CacheTy));
     NativeAddr[&GV] = dlsymHelper(M, GV.getName(), Cache);
   }
 

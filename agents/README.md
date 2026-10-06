@@ -40,7 +40,7 @@ scope**, and CBC function pointers are deliberately not executable (`13-engine-c
 |---|---|
 | `cbc_x86_64-unknown-linux-gnu` | **in scope**: implemented, tested, shipped |
 | `cbc_aarch64-unknown-linux-gnu` | **follow-up**: fully designed in these documents (register mapping, ABI, `va_list`, data layout), not in the current work scope (`04-architecture.md` §2) |
-| whole-program compilation (bitcode objects, code generation in `cbc-ld`) | **in scope**: the only build model |
+| whole-program compilation (bitcode objects, code generation in `cbc-ld` / `ld.lld --cbc`) | **in scope**: the only build model; linker home is `24-lld-integration.md` |
 | separate code generation ("phase 2": relocatable CBC objects, per-object data images) | **postponed indefinitely**: kept as a design sketch (`10-linker-and-runtime.md` §4, `04-architecture.md` §6.5), not implemented |
 | Apple / OpenHarmony triples, native→CBC callbacks, threads | not planned |
 
@@ -71,6 +71,7 @@ scope**, and CBC function pointers are deliberately not executable (`13-engine-c
 | 20  | `[20-setjmp-isel.md](20-setjmp-isel.md)`                 | `CBCLowerSjLj` builds a CFG that dies in live-variable analysis. `setjmp`/`longjmp` do not compile. |
 | 21  | `[21-native-aggregate-abi.md](21-native-aggregate-abi.md)` | Clang still uses the default ABI, so native struct returns such as `div_t` are passed as hidden pointers. Host glibc returns them in `rax`. |
 | 22  | `[22-method-resolution.md](22-method-resolution.md)`     | Some libc++ calls compile as `call.direct` and then the engine cannot find the method: `std::map` emplace and `std::runtime_error`. A class throw also misses a GC liveness position. |
+| 24  | `[24-lld-integration.md](24-lld-integration.md)`         | Delete `cbc-ld`. Linux: ELF `ld.lld --cbc` resolves GNU `INPUT()`/`GROUP()` scripts; emit lives in a flavor-neutral `lld/CBC` library so Mach-O can hook later (out of scope). Authoritative over `10` §2.1 and `09` §4.2 for where the linker lives. |
 
 
 

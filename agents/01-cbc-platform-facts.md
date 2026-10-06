@@ -387,15 +387,16 @@ read-only tables at startup (`04-architecture.md` §6).
 
 ## 11. Symbol lookup and native libraries
 
-* `aotDeps` (header string, `':'`-separated names) lists native libraries; each name `X`
-  is opened as `libX.so` (`UpdateSharedObjName`, `engine.cpp:188-207`; `.dylib` on Apple).
-  `dlopen` failures are not reported.
+* `aotDeps` (header string, `':'`-separated tokens) lists native libraries. Each
+  token is opened first as a SONAME (`dlopen` as-is, e.g. `libncurses.so.6`), then
+  — if that fails — as a stem via `UpdateSharedObjName` (`lib` + token + `.so`;
+  `.dylib` on Apple). `dlopen` failures are not reported. There is no `.so.N`
+  version guessing. New links should write SONAMEs (`24-lld-integration.md` §7).
 * The current executable is always searched first (`OpenCurrentExecutable`), so symbols of
   the launcher's dependencies (glibc, libstdc++, libm typically) resolve without listing
   them.
-* glibc's `libm.so` is an `ld` script, not a shared object; versioned names like
-  `libm.so.6` cannot be expressed through `lib<name>.so`. Rely on the executable's global
-  scope or ship symlinks.
+* glibc's `libm.so` / `libncurses.so` are often `ld` scripts, not shared objects.
+  Stem-only tokens cannot open those; record the real SONAME from the linker instead.
 
 ## 12. Limits and engine quirks the backend must respect
 
