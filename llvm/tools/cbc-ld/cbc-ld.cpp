@@ -126,13 +126,19 @@ int main(int argc, char **argv) {
 
   std::set<std::pair<std::string, uint64_t>> Extracted;
   for (int Round = 0; Round < 64; ++Round) {
-    DenseSet<StringRef> Undef;
+    // Use owned strings: linkInModule can erase declarations and invalidate
+    // StringRefs into the composite module. Treat available_externally as still
+    // needing a real archive definition (isDeclarationForLinker).
+    std::vector<std::string> UndefStorage;
     for (Function &F : *Composite)
-      if (F.isDeclaration() && !F.use_empty() && !F.isIntrinsic())
-        Undef.insert(F.getName());
+      if (F.isDeclarationForLinker() && !F.use_empty() && !F.isIntrinsic())
+        UndefStorage.emplace_back(F.getName().str());
     for (GlobalVariable &GV : Composite->globals())
-      if (GV.isDeclaration() && !GV.use_empty())
-        Undef.insert(GV.getName());
+      if (GV.isDeclarationForLinker() && !GV.use_empty())
+        UndefStorage.emplace_back(GV.getName().str());
+    DenseSet<StringRef> Undef;
+    for (const std::string &Name : UndefStorage)
+      Undef.insert(Name);
     bool Progress = false;
     for (const std::string &Path : Archives) {
       ErrorOr<std::unique_ptr<MemoryBuffer>> Buf = MemoryBuffer::getFile(Path);
@@ -167,8 +173,6 @@ int main(int argc, char **argv) {
         Needed.push_back({*Off, Name.str()});
       }
       for (const auto &Item : Needed) {
-        if (!Extracted.insert({Path, Item.first}).second)
-          continue;
         Expected<std::optional<object::Archive::Child>> ChildOrErr =
             (*Arch)->findSym(Item.second);
         if (!ChildOrErr || !*ChildOrErr) {
@@ -176,6 +180,8 @@ int main(int argc, char **argv) {
             consumeError(ChildOrErr.takeError());
           continue;
         }
+        if (!Extracted.insert({Path, Item.first}).second)
+          continue;
         Expected<StringRef> Member = (*ChildOrErr)->getBuffer();
         if (!Member) {
           errs() << "cbc-ld: bad archive member in " << Path << "\n";
