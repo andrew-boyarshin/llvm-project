@@ -47,21 +47,29 @@ are considered together because they couple:
 | Module flag `CBC = 1` plus `"CBC ABI"` | **One key.** Presence of `"CBC"` means CBC; the value is the ABI string; merge behavior `Require` (§4.5). |
 | TU-wide `-fno-vectorize` | **No.** Disable LoopVectorize/SLP on every function that is not `cbc_native` (§4.4). |
 
-The rest of this file is why, what breaks, and the order of work.
+The rest of this file is why, what breaks, and the order of work. **Delivery
+is two stages** (§9): **26a** host triple + `-fcbc` without `cbc_native`;
+**26b** the attribute and mixed codegen.
 
 ## 1. What is already decided (`25`) and what this adds
 
-`25` already specifies the product table:
+`25` already specifies the product table (container, DSO, or packaging
+wrap; no host-executable wrap):
 
 ```
 ld.lld --cbc -o a.cbc              →  CBC container
 ld.lld --cbc -shared -o libfoo.so  →  ELF DSO, .cbc embedded
 ld.lld --cbc --lto-emit-llvm -o x.bc
-                                   →  host-triple bitcode of the wrapper
+ld.lld --cbc -r -o foo.o           →  host bitcode / relocatable wrap
 ```
 
-`--cbc` remains required (`24` §6.1). The extension is consulted only after that
-flag. Default `-o` stays `a.cbc`.
+**Runnable:** `launcher a.cbc` or `launcher libfoo.so` (`25` §4.1: ELF sniff →
+`dlopen` → ctor `load_buffer` → existing `FindMain` trampoline). `.bc` /
+`.a` / `-r` are not launcher inputs. No exported “run main” symbol, no host
+`main` shim.
+
+`--cbc` remains required (`24` §6.1). The extension / `-shared` is consulted
+only after that flag. Default `-o` stays `a.cbc`.
 
 This document does **not** reopen that table. `24` §11 and `25` already
 invoke clang as `--target=x86_64-unknown-linux-gnu -fcbc`. This file adds:
@@ -88,10 +96,9 @@ A flag (`--cbc-emit=wrap`) is clearer in isolation. It is worse in the driver:
   `libm.so` scripts (`24`, `25` §1).
 * Users already think in artifacts: “I asked for `libfoo.so`.”
 
-Con: `ld.lld --cbc -o foo` (no extension) wrapping an executable is surprising
-if someone expected a container. Mitigation stays `25` §2: default `a.cbc`;
-`-o foo.cbc` is the container; document that a bare `-o foo` is a host
-executable.
+Con: `ld.lld --cbc -o foo` (no extension) is an **error** in `25` v1 (not
+a host executable). Mitigation: default `a.cbc`; require `-shared` / `*.so`
+for wrap.
 
 ### 2.2 Edge cases
 
@@ -99,11 +106,13 @@ executable.
 |---|---|---|
 | `-o a.cbc` plus `-shared` | **Error** | Container has no SONAME / DT_NEEDED story; `25` already errors host flags on `.cbc`. |
 | `-o libfoo.so` without `-shared` | DSO (warn once) | `25`. |
-| `-o -` / `/dev/stdout` | Container if `--cbc` and no `-shared`/`-r`; else error | Do not sniff a non-file. |
+| `-o -` / `/dev/stdout` | Container if `--cbc` and no `-shared`; else error | Do not sniff a non-file. |
 | `-o libfoo.so.1` | Host DSO | Real SONAMEs rarely end in `.cbc`. |
-| `-o foo.CBC` | Host, not container | Match `.cbc` case-sensitively (Unix). |
+| `-o foo.CBC` | Host wrap if `-shared` / etc.; else error | Match `.cbc` case-sensitively (Unix). |
+| `*.a` / `*.bc` / `-r` | Packaging wrap | Not launcher-runnable (`25` §2). |
+| `a.out` / `*.exe` (no `-shared`) | **Error** | No host-executable wrap. |
 | Response files, `--end-lib` | Irrelevant | Decision is the driver’s `-o`, not input names. |
-| `cbc_native` definitions + `-o *.cbc` | **Error** | §6.3. |
+| `cbc_native` definitions + `-o *.cbc` | **Error** | §6.3; use `-shared` (or other host wrap). |
 | Native ET_REL `.o` on the command line | **Error** (unchanged) | Wrap objects are synthesized inside lld; mixing precompiled ELF is a later product. |
 
 ### 2.3 Pros / cons of folding wrap into `lld --cbc`
@@ -111,7 +120,7 @@ executable.
 | Pro | Con |
 |---|---|
 | One clang link line; no wrap tool’s `-L` / sysroot / option parser | ELF `Writer` must run on a **fresh** native request (`25` §13); easy to inherit CBC `elf::Ctx` (scripts, `SharedFile`s) and emit nonsense |
-| Bitcode `.a` of the wrapper is LTO-ready without a second pipeline | Product is overloaded: same flag, two file formats. Tests and `file(1)` must always check `-o` |
+| Bitcode `.a` of the wrapper is LTO-ready without a second pipeline; launcher still runs `.cbc` / DSO (`25` §4.1) | Product is overloaded: same flag, several file formats. Tests and `file(1)` must always check `-o` |
 | Matches “the linker decides the artifact” (ELF vs binary vs `--oformat`) | `25` W3 (N2C stubs) is still gated on engine verification; shipping wrap ELF without that is a false “done” |
 | Mach-O wrap later is the same process on `ld64.lld --cbc` | Until Mach-O resolution exists, Darwin wrap is a host module that cannot yet be a dylib |
 
@@ -542,7 +551,7 @@ CBC code in the same TU.
 | Product (`25` §2) | `cbc_native` definitions |
 |---|---|
 | `*.cbc` container | **Link error.** No host text segment. The engine loads bytecode, not ELF. |
-| ELF/Mach-O DSO, executable, relocatable, host bitcode `.bc` / `.a` | Allowed. Native functions are extra members of the wrap module (or a second host object in the same `Writer` request). |
+| ELF/Mach-O DSO, relocatable, host bitcode `.bc` / `.a` | Allowed. Native functions are extra members of the wrap module (or a second host object in the same `Writer` request). Runnable via `launcher` only for DSOs with `main` (`25` §4.1). |
 
 ```
 error: 'saxpy' is marked cbc_native; native machine code cannot be written to a .cbc
@@ -753,7 +762,7 @@ Clang never selects `ArchType::cbc`. lld always does, internally, when
 | `21` | Mostly moot: we *are* `X86_64ABIInfo` |
 | `23` F-09 | Closed by prohibition, not by legalizer |
 | `24` P7, clang invoke | Host triple + flag; `--cbc` unchanged |
-| `25` wrap pipeline | Unchanged product table; F6 adds Module N (`cbc_native`) after W2 |
+| `25` wrap pipeline | Container / DSO / `.a` / `.bc` / `-r`; launcher runs `.cbc` and DSO (`25` §4.1); F6 adds Module N after W2 |
 
 ### 8.2 Code (order-of-magnitude)
 
@@ -793,7 +802,97 @@ Already in tree today: `clang/lib/Basic/Targets/CBC.*`,
 * Compiling compiler-rt builtins as `cbc_native` for speed.
 * iOS / Windows.
 
-## 9. Alternatives considered
+## 9. Two delivery stages (26a / 26b)
+
+This document describes one target design. **Ship it in two stages.** Stage 2
+introduces `__attribute__((cbc_native))`; stage 1 does not. `25` wrap
+(W0–W5) stays in stage 1 and does **not** wait for stage 2. `25` never
+partitions the linked module for user native functions — only linker-
+synthesized blob, ctor, and N2C stubs.
+
+### 9.1 Stage 1 (26a) — host triple + `-fcbc`, no `cbc_native`
+
+**Goal:** Replace the user-facing `cbc_*` architecture with
+`--target=x86_64-unknown-linux-gnu -fcbc` (and AArch64/Darwin equivalents),
+honest `long double`, and the `"CBC"` module flag. **Every function in a
+`-fcbc` TU is still CBC bytecode.** One `CBCTargetMachine` path at link; no
+Module C / Module N split; no user host `.text` beside the blob (wrap stubs
+from `25` are unchanged).
+
+| Work | Steps | Notes |
+|---|---|---|
+| Linker parity | **F0** (`24`) | CBC TM by target name, not `lookupTarget(triple)` |
+| Safety rail | **F1** | `"CBC"` module flag + ABI string, `Require` merge |
+| `long double` | **F3** | Can land on today’s `CBCTargetInfo` before F4 |
+| Clang architecture | **F4** (26a scope) | `-fcbc`, host `TargetInfo` overlay, delete `cbc_*`, lld accepts host-triple bitcode + flag |
+| Runtime libs | **F7** | libc++ no-`long double` knob; cmake uses host triple + `-fcbc` |
+| Wrap (optional parallel) | **F2**, **F5** + `25` W0–W5 | Not blocked on F4; converges tests/docs on `-fcbc` when F4 ships |
+
+**Stage 1 interpretation of §4 (whole module = CBC).** Several rules in §4
+are written in terms of `cbc_native` vs default CBC functions. Until stage 2
+exists, apply them to **every** function in a `-fcbc` translation unit:
+
+| §4 rule | Stage 1 (no attribute yet) |
+|---|---|
+| §4.4 vectorization | Put `"cbc"` on all `-fcbc` functions; skip LoopVectorize/SLP. **Required** as soon as F4 uses host TTI at `-c`. |
+| §4.2 stack protector / jump tables | `no_stack_protector` and `"no-jump-tables"` on **all** `-fcbc` functions (same effect as today’s TU-wide `-fno-*`). |
+| §4.2 emulated TLS | Keep **`-femulated-tls` on the driver**, or run `LowerEmuTLS` on the **whole** linked module at link. Do **not** drop emutls in stage 1 without one of those — F-11. |
+| §4.2 fortify | Either keep today’s `-U_FORTIFY_SOURCE` until stage 2, or leave platform default; do not half-implement `_chk` policy. |
+| §4.3 `*intrin.h` | **Keep** `#error` compat wrappers in stage 1. Deleting them belongs in stage 2 when Sema can point at `cbc_native`. |
+| §4.1 Sema (asm, intrinsics) | Error with “not supported in CBC code”; **no** fix-it mentioning `cbc_native` until stage 2. |
+
+Stage 1 does **not** include: attribute spelling, link-time partition,
+host codegen of user functions, merge of Module N into wrap, or “`cbc_native`
++ `.cbc`” link errors (§6.3).
+
+**Exit criteria for 26a:** `clang --target=x86_64-unknown-linux-gnu -fcbc`
+is the only documented invoke; bitcode carries `"CBC"`; launcher `.cbc`
+links and runs; wrap from `25` can ship without any `cbc_native` code in
+user TUs.
+
+### 9.2 Stage 2 (26b) — `__attribute__((cbc_native))`
+
+**Goal:** Mixed codegen in one TU and one link: some functions bytecode,
+some host ISA. Requires wrap (or another host product) to place Module N
+`.text`.
+
+| Work | Step | Depends on |
+|---|---|---|
+| Attribute, Sema + fix-it, ISel gate | **F6** | **F2** / 25a W2 minimum (DSO with blob+ctor); full stub story is 25b W3–W4 if `cbc_native` calls CBC |
+| §4.2 drop TU-wide emutls/SSP/JT/fortify | part of F6 | Split: `LowerEmuTLS` on Module C only; per-function attrs keyed off `cbc_native` |
+| §4.3 delete `*intrin.h` wrappers | part of F6 | Real headers + attribute path |
+| §6.3–§6.8 | part of F6 | Partition before O2; host TM on Module N; merge N object into wrap; `.cbc` errors if N nonempty |
+
+**Exit criteria for 26b:** A `cbc_native` kernel in a `-shared` DSO is
+callable from CBC; a link that would write only `.cbc` but contains a
+`cbc_native` definition fails with the §6.3 diagnostic.
+
+### 9.3 How stages relate to `24` / `25`
+
+```
+24 (F0) ──► 25a W0–W2b (F2) ──► 25b W3–W5   } wrap stages (25 §12)
+     ╲
+      ╲──► 26a F1, F3, F4, F7           } after or beside 24; not blocked on wrap
+                │
+                ▼
+           26b F6 (cbc_native)           } after 26a + 25a W2 at minimum
+```
+
+Do **not** fold 26a into `25`’s W-steps: the overlay and triple move are a
+clang milestone, not wrap logic. Do **not** start 26b before wrap can emit a
+host object (25a W2), or F6 has nowhere to put user native text. The engine
+runner is **`launcher`** (`tools/launcher/`), not `cbc-run`.
+
+### 9.4 What stays out of both stages
+
+* Phase-2 relocatable CBC objects (`10` §4).
+* IR-merge of the wrap sidecar with CBC bitcode (wrap stays a separate
+  native object; §4.5).
+* Image-base relocation so `cbc_native` can touch CBC globals without
+  pointers (§6.7 follow-up).
+* iOS / Windows products beyond what `25` already lists.
+
+## 10. Alternatives considered
 
 **Keep `cbc_*` forever, add wrap and `cbc_native` on top.** Smallest delta.
 `cbc_native` functions would be IR with a CBC triple compiled by X86 — every
@@ -818,31 +917,27 @@ Reject.
 N2C stub for this CBC function.” `cbc_native` is “this function is not CBC.”
 A function is never both.
 
-## 10. Implementation order
+## 11. Implementation order
 
-Relative to `24` / `25`. Each line is independently shippable; later lines
-assume earlier ones.
+Relative to `24` / `25` and §9. Steps are tagged **26a** or **26b**.
 
-| Step | Work | Exit |
-|---|---|---|
-| **F0** | `24` as specified (CBC TM by name, not `lookupTarget(triple)`) | today’s programs link |
-| **F1** | Module flag `!"CBC"` = ABI string, `Require` merge; `ld.lld` without `--cbc` errors if the key is present | safety rail exists before the clang architecture dies |
-| **F2** | `25` W0–W2: `linkToMemory`, wrap blob+ctor, ELF `-shared` | `dlopen` inits a library `.cbc`; product table live |
-| **F3** | `long double` prohibition on the **current** TargetInfo (error on uses; stop remap work) | F-09 tests inverted: `sizeof` is 16, arithmetic does not compile |
-| **F4** | `-fcbc` + host `TargetInfo`; delete `cbc_*` (no alias); drop the four TU-wide driver flags; delete `*intrin.h` wrappers; lld takes host-triple bitcode | `clang --target=x86_64-unknown-linux-gnu -fcbc` is the only invoke |
-| **F5** | `25` W3–W4: N2C stubs, address-taken | native C calls a CBC export |
-| **F6** | `cbc_native`: Sema + split + host codegen into the wrap; `.cbc` product errors | SIMD/asm kernel in a DSO called from CBC; `.cbc` link fails cleanly |
-| **F7** | libc++ no-long-double; delete rename table and `CBCTargetInfo` | no `cbc_*` in cmake |
+| Step | Stage | Work | Exit |
+|---|---|---|---|
+| **F0** | (24) | `24` as specified (CBC TM by name, not `lookupTarget(triple)`) | today’s programs link |
+| **F1** | 26a | Module flag `!"CBC"` = ABI string, `Require` merge; `ld.lld` without `--cbc` errors if the key is present | safety rail before F4 |
+| **F2** | 25a | `25` W0–W2b: wrap DSO + `launcher` ELF/`dlopen`/`FindMain` | `launcher lib.so` runs `main` when present |
+| **F3** | 26a | `long double` prohibition on the **current** TargetInfo (error on uses; stop remap work) | F-09 inverted |
+| **F4** | 26a | `-fcbc` + host `TargetInfo`; delete `cbc_*`; `"cbc"` on all functions for vectorize/SSP/JT per §9.1; lld takes host-triple bitcode. **Not** in F4: drop TU emutls, delete `*intrin.h`, `cbc_native` | only documented invoke |
+| **F5** | 25 | `25` W3–W4: N2C stubs, address-taken | native C calls a CBC export |
+| **F7** | 26a | libc++ no-long-double; delete rename table and `CBCTargetInfo` | no `cbc_*` in cmake |
+| **F6** | 26b | `cbc_native`: §9.2 — split, dual TM, wrap merge, `.cbc` errors, §4.2–§4.3 as written for mixed TUs | kernel in DSO; `.cbc` + native def fails |
 
-F3 before F4 is intentional: prohibition does not depend on the triple, and
-it stops anyone implementing the `sinl`→`sin` legalizer that `23` still
-treats as the F-09 fix.
+F3 before F4 is intentional (§9.1). **F7** may trail **F4** slightly (libc++
+knob). **F6** (26b) must not start before **F2** and should follow **F4**
+(26a): need wrap host object and the real `-fcbc` overlay before mixed
+codegen.
 
-F6 must not start before F2: without a wrap product there is nowhere to put
-native text except a `.cbc` link error, which is not a useful feature on its
-own.
-
-## 11. Risks
+## 12. Risks
 
 | Risk | Mitigation |
 |---|---|
@@ -855,11 +950,12 @@ own.
 | Reviewers delete `lib/Target/CBC` reading this title | §3 is the first reply; the backend stays |
 | Naked-asm stubs (`25`) vs user inline asm | Different: stubs are linker-synthesized host IR; user asm is in Module N. Do not run CBC `ResolveSymbols` on N |
 
-## 12. Summary
+## 13. Summary
 
-`ld.lld --cbc` already has the right product switch in `25`: the `.cbc`
-suffix means a container; anything else means a host artifact with the
-container inside. There is no wrap step.
+`ld.lld --cbc` already has the right product switch in `25`: `.cbc` means a
+container; other outputs wrap the container in a host module. There is no
+wrap tool. Run `.cbc` or a DSO with `launcher` (`25` §4.1); `.a` / `.bc` /
+`-r` are packaging only.
 
 CBC should not be a clang architecture. It should be `-fcbc` on
 `x86_64-unknown-linux-gnu` / `aarch64-unknown-linux-gnu` / Darwin. The module

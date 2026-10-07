@@ -81,6 +81,7 @@ add_lld_library(lldELF
 
   LINK_LIBS
   lldCommon
+  lldCBC
   ${imported_libs}
   ${LLVM_PTHREAD_LIB}
 

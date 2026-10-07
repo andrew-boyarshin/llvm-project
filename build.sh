@@ -32,7 +32,7 @@ cmake --install "$RUNTIME_BUILD"
 required=(
   "$PREFIX/bin/clang"
   "$PREFIX/bin/clang++"
-  "$PREFIX/bin/cbc-ld"
+  "$PREFIX/bin/ld.lld"
   "$PREFIX/lib/cbc/crt-cbc.bc"
   "$PREFIX/lib/cbc/cbc_can_catch_stub.bc"
   "$PREFIX/lib/cbc/include/unwind.h"

@@ -227,7 +227,8 @@ std::optional<std::string> elf::findFromSearchPaths(Ctx &ctx, StringRef path) {
 std::optional<std::string> elf::searchLibraryBaseName(Ctx &ctx,
                                                       StringRef name) {
   for (StringRef dir : ctx.arg.searchPaths) {
-    if (!ctx.arg.isStatic)
+    // CBC always prefers DSOs (or DSO scripts); -Bstatic must not disable .so.
+    if (!ctx.arg.isStatic || ctx.arg.cbcMode)
       if (std::optional<std::string> s =
               findFile(ctx, dir, "lib" + name + ".so"))
         return s;

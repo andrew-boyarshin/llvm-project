@@ -1,129 +1,89 @@
+//===- CBCLink.cpp --------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// Mechanical move of llvm/tools/cbc-ld/cbc-ld.cpp emit pipeline.
+// Archive extraction is the cbc-ld 64-round loop, not ELF lazy symbols.
+//
+//===----------------------------------------------------------------------===//
+
+#include "lld/CBC/CBCLink.h"
+#include "lld/Common/ErrorHandler.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/SmallString.h"
-#include "llvm/Bitcode/BitcodeReader.h"
-#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Triple.h"
 #include <set>
 #include <utility>
 #include <vector>
-#include "llvm/Target/TargetMachine.h"
-#include "llvm/TargetParser/Host.h"
-#include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
+using namespace lld;
 
-static cl::opt<std::string> Output("o", cl::desc("Output .cbc file"),
-                                   cl::value_desc("file"));
-static cl::opt<std::string> CrtPath("crt", cl::desc("Path to crt-cbc.bc"));
-static cl::list<std::string> LibPaths("L", cl::Prefix, cl::desc("Library search path"));
-static cl::list<std::string> Libs("l", cl::Prefix, cl::desc("Link a bitcode archive"));
-static cl::list<std::string> Inputs(cl::Positional, cl::desc("<bitcode or archive>"));
-static cl::opt<bool> NoValidate("no-native-validation", cl::init(true));
+namespace {
 
-// Host libs the CBC launcher process already provides. When no bitcode
-// archive is found for these names, that is expected — they are not missing
-// inputs and must not be written into aotDeps.
-static bool isLauncherHostLib(StringRef Name) {
-  return Name == "c" || Name == "m" || Name == "pthread" || Name == "dl" ||
-         Name == "rt" || Name == "gcc" || Name == "gcc_s" || Name == "resolv";
+const Target *findCBCTarget() {
+  for (const Target &T : TargetRegistry::targets())
+    if (StringRef(T.getName()) == "cbc")
+      return &T;
+  return nullptr;
 }
 
-static std::string findArchive(StringRef Name) {
-  std::string File = ("lib" + Name + ".a").str();
-  for (const std::string &Dir : LibPaths) {
-    SmallString<256> Path(Dir);
-    sys::path::append(Path, File);
-    if (sys::fs::exists(Path))
-      return std::string(Path);
+} // namespace
+
+bool cbc::link(const CBCLinkRequest &request) {
+  if (request.wholeModules.empty()) {
+    error("no bitcode input");
+    return false;
   }
-  return "";
-}
-
-static std::unique_ptr<Module> loadIR(LLVMContext &Ctx, StringRef Path,
-                                      SMDiagnostic &Err) {
-  return parseIRFile(Path, Err, Ctx);
-}
-
-int main(int argc, char **argv) {
-  InitLLVM X(argc, argv);
-  cl::ParseCommandLineOptions(argc, argv, "CBC whole-program linker\n");
-  if (Output.empty() || Inputs.empty()) {
-    errs() << "cbc-ld: expected -o <file> and at least one bitcode input\n";
-    return 1;
-  }
-
-  InitializeAllTargets();
-  InitializeAllTargetMCs();
-  InitializeAllAsmPrinters();
-  InitializeAllAsmParsers();
 
   LLVMContext Ctx;
   SMDiagnostic Err;
-  auto Composite = std::make_unique<Module>("cbc-ld", Ctx);
+  auto Composite = std::make_unique<Module>("lld-cbc", Ctx);
   Linker L(*Composite);
 
-  if (!CrtPath.empty()) {
-    auto Crt = loadIR(Ctx, CrtPath, Err);
-    if (!Crt) {
-      Err.print("cbc-ld", errs());
-      return 1;
-    }
-    if (L.linkInModule(std::move(Crt))) {
-      errs() << "cbc-ld: failed to link crt\n";
-      return 1;
-    }
-  }
-  std::vector<std::string> Archives;
-  auto linkWhole = [&](StringRef Path) -> bool {
-    auto M = loadIR(Ctx, Path, Err);
+  Triple ExpectedTriple = request.triple;
+  for (MemoryBufferRef MB : request.wholeModules) {
+    std::unique_ptr<Module> M = parseIR(MB, Err, Ctx);
     if (!M) {
-      Err.print("cbc-ld", errs());
+      Err.print("ld.lld", errs());
+      error("failed to parse bitcode '" + MB.getBufferIdentifier() + "'");
+      return false;
+    }
+    Triple MT(M->getTargetTriple());
+    if (ExpectedTriple.getTriple().empty())
+      ExpectedTriple = MT;
+    else if (MT != ExpectedTriple) {
+      error("bitcode triple mismatch: '" + MB.getBufferIdentifier() + "' is " +
+            MT.str() + ", expected " + ExpectedTriple.str());
       return false;
     }
     if (L.linkInModule(std::move(M))) {
-      errs() << "cbc-ld: failed to link " << Path << "\n";
+      error("failed to link bitcode '" + MB.getBufferIdentifier() + "'");
       return false;
     }
-    return true;
-  };
-  for (const std::string &In : Inputs) {
-    if (StringRef(In).ends_with(".a"))
-      Archives.push_back(In);
-    else if (!linkWhole(In))
-      return 1;
   }
-  std::vector<std::string> NativeLibs;
-  for (const std::string &Lib : Libs) {
-    std::string Path = findArchive(Lib);
-    if (!Path.empty()) {
-      // Bitcode archive (CBC guest code).
-      Archives.push_back(Path);
-    } else if (isLauncherHostLib(Lib)) {
-      // Already in the launcher process; omit from aotDeps.
-    } else {
-      // Host shared library for the launcher to dlopen (name without lib/.so).
-      NativeLibs.push_back(Lib);
-    }
-  }
+  if (ExpectedTriple.getTriple().empty())
+    ExpectedTriple = request.triple;
 
+  // Lazy bitcode archives: cbc-ld 64-round loop (not ELF lazy BitcodeFile).
   std::set<std::pair<std::string, uint64_t>> Extracted;
   for (int Round = 0; Round < 64; ++Round) {
     // Use owned strings: linkInModule can erase declarations and invalidate
@@ -140,18 +100,18 @@ int main(int argc, char **argv) {
     for (const std::string &Name : UndefStorage)
       Undef.insert(Name);
     bool Progress = false;
-    for (const std::string &Path : Archives) {
+    for (StringRef Path : request.lazyArchives) {
       ErrorOr<std::unique_ptr<MemoryBuffer>> Buf = MemoryBuffer::getFile(Path);
       if (!Buf) {
-        errs() << "cbc-ld: cannot read " << Path << "\n";
-        return 1;
+        error("cannot read " + Path);
+        return false;
       }
       Expected<std::unique_ptr<object::Archive>> Arch =
           object::Archive::create(Buf.get()->getMemBufferRef());
       if (!Arch) {
-        errs() << "cbc-ld: not an archive: " << Path << "\n";
+        error("not an archive: " + Path);
         consumeError(Arch.takeError());
-        return 1;
+        return false;
       }
       std::vector<std::pair<uint64_t, std::string>> Needed;
       for (object::Archive::Symbol Sym : (*Arch)->symbols()) {
@@ -168,7 +128,7 @@ int main(int argc, char **argv) {
           consumeError(Off.takeError());
           continue;
         }
-        if (Extracted.count({Path, *Off}))
+        if (Extracted.count({Path.str(), *Off}))
           continue;
         Needed.push_back({*Off, Name.str()});
       }
@@ -180,24 +140,25 @@ int main(int argc, char **argv) {
             consumeError(ChildOrErr.takeError());
           continue;
         }
-        if (!Extracted.insert({Path, Item.first}).second)
+        if (!Extracted.insert({Path.str(), Item.first}).second)
           continue;
         Expected<StringRef> Member = (*ChildOrErr)->getBuffer();
         if (!Member) {
-          errs() << "cbc-ld: bad archive member in " << Path << "\n";
+          error("bad archive member in " + Path);
           consumeError(Member.takeError());
-          return 1;
+          return false;
         }
         std::unique_ptr<Module> M =
             parseIR(MemoryBufferRef(*Member, Item.second), Err, Ctx);
         if (!M) {
-          Err.print("cbc-ld", errs());
-          return 1;
+          Err.print("ld.lld", errs());
+          error("failed to parse archive member defining " + Item.second);
+          return false;
         }
         if (L.linkInModule(std::move(M))) {
-          errs() << "cbc-ld: failed to link member of " << Path
-                 << " defining " << Item.second << "\n";
-          return 1;
+          error("failed to link member of " + Path + " defining " +
+                Item.second);
+          return false;
         }
         Progress = true;
       }
@@ -205,31 +166,33 @@ int main(int argc, char **argv) {
     if (!Progress)
       break;
     if (Round == 63) {
-      errs() << "cbc-ld: archive extraction did not converge\n";
-      return 1;
+      error("archive extraction did not converge");
+      return false;
     }
   }
-  (void)NoValidate;
+
   for (GlobalValue &GV : Composite->global_values()) {
     if (!GV.isDeclaration() || GV.use_empty())
       continue;
     if (GV.getName().starts_with("_Z")) {
-      errs() << "cbc-ld: error: native C++ symbol '" << GV.getName()
-             << "' is not supported on CBC\n";
-      return 1;
+      error("native C++ symbol '" + GV.getName() +
+            "' is not supported on CBC");
+      return false;
     }
   }
-  Composite->setTargetTriple(Triple("cbc_x86_64-unknown-linux-gnu"));
+
+  Composite->setTargetTriple(ExpectedTriple);
   Composite->addModuleFlag(Module::Warning, "cbc-whole-program", uint32_t(1));
-  if (!NativeLibs.empty()) {
-    std::string Deps = NativeLibs[0];
-    for (size_t I = 1; I < NativeLibs.size(); ++I) {
+  if (!request.aotDeps.empty()) {
+    std::string Deps = request.aotDeps[0].str();
+    for (size_t I = 1; I < request.aotDeps.size(); ++I) {
       Deps += ':';
-      Deps += NativeLibs[I];
+      Deps += request.aotDeps[I];
     }
     Composite->getOrInsertNamedMetadata("cbc.aotDeps")
         ->addOperand(MDNode::get(Ctx, MDString::get(Ctx, Deps)));
   }
+
   // crt is compiled as C, so clang marks it nounwind. C++ throw must stay
   // may-unwind or the optimizer deletes the landing pad.
   for (const char *Name : {"__cbc_raise", "__cbc_nullcheck",
@@ -268,9 +231,9 @@ int main(int argc, char **argv) {
       continue;
     for (const char *Name : Unsupported) {
       if (F.getName() == Name) {
-        errs() << "cbc-ld: error: '" << F.getName()
-               << "' is not supported on CBC: its callback would be called by "
-                  "native code\n";
+        error("'" + F.getName() +
+              "' is not supported on CBC: its callback would be called by "
+              "native code");
         Failed = true;
       }
     }
@@ -288,9 +251,9 @@ int main(int argc, char **argv) {
           const Value *V = U->stripPointerCasts();
           const auto *AF = dyn_cast<Function>(V);
           if (AF && !AF->isDeclaration()) {
-            errs() << "cbc-ld: error: passing CBC function '" << AF->getName()
-                   << "' to native function '" << Callee->getName()
-                   << "'; native code calling CBC code is not supported\n";
+            error("passing CBC function '" + AF->getName() +
+                  "' to native function '" + Callee->getName() +
+                  "'; native code calling CBC code is not supported");
             Failed = true;
           }
         }
@@ -298,37 +261,36 @@ int main(int argc, char **argv) {
     }
   }
   if (Failed)
-    return 1;
+    return false;
 
-  std::string Error;
-  const Target *T = TargetRegistry::lookupTarget(Composite->getTargetTriple(), Error);
+  const Target *T = findCBCTarget();
   if (!T) {
-    errs() << "cbc-ld: " << Error << "\n";
-    return 1;
+    error("CBC target is not registered");
+    return false;
   }
   TargetOptions Options;
   auto TM = std::unique_ptr<TargetMachine>(T->createTargetMachine(
-      Composite->getTargetTriple(), "", "", Options, Reloc::Static,
-      CodeModel::Small, CodeGenOptLevel::Default));
+      ExpectedTriple, "", "", Options, Reloc::Static, CodeModel::Small,
+      CodeGenOptLevel::Default));
   if (!TM) {
-    errs() << "cbc-ld: cannot create target machine\n";
-    return 1;
+    error("cannot create CBC target machine");
+    return false;
   }
   Composite->setDataLayout(TM->createDataLayout());
 
   std::error_code EC;
-  ToolOutputFile Out(Output, EC, sys::fs::OF_None);
+  ToolOutputFile Out(request.outputPath, EC, sys::fs::OF_None);
   if (EC) {
-    errs() << "cbc-ld: " << EC.message() << "\n";
-    return 1;
+    error(EC.message());
+    return false;
   }
   legacy::PassManager CodeGen;
   if (TM->addPassesToEmitFile(CodeGen, Out.os(), nullptr,
                               CodeGenFileType::ObjectFile)) {
-    errs() << "cbc-ld: target cannot emit an object file\n";
-    return 1;
+    error("CBC target cannot emit an object file");
+    return false;
   }
   CodeGen.run(*Composite);
   Out.keep();
-  return 0;
+  return errorCount() == 0;
 }

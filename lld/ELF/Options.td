@@ -91,6 +91,11 @@ defm split_stack_adjust_size
 
 def O: JoinedOrSeparate<["-"], "O">, HelpText<"Optimize output file size">;
 
+def cbc: FF<"cbc">, HelpText<"Write a CBC image instead of ELF">;
+defm crt: EEq<"crt", "Bitcode runtime linked whole first">;
+def no_native_validation: FF<"no-native-validation">,
+  HelpText<"Accepted and ignored (native dynsym validation is not implemented)">;
+
 def cmse_implib: FF<"cmse-implib">,
   HelpText<"Make the output library to be a CMSE secure code import library">;
 

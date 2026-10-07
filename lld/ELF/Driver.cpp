@@ -37,12 +37,15 @@
 #include "SyntheticSections.h"
 #include "Target.h"
 #include "Writer.h"
+#include "lld/CBC/CBCLink.h"
 #include "lld/Common/Args.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
 #include "lld/Common/Strings.h"
 #include "lld/Common/Version.h"
+#include "llvm/TargetParser/Triple.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -78,6 +81,80 @@ using namespace lld::elf;
 
 static void setConfigs(Ctx &ctx, opt::InputArgList &args);
 static void readConfigs(Ctx &ctx, opt::InputArgList &args);
+
+// Host libs the CBC launcher process already provides. Matched by omit-stem
+// of a SharedFile SONAME, or by the bare -l name when search fails.
+static bool isLauncherHostLib(StringRef name) {
+  return name == "c" || name == "m" || name == "pthread" || name == "dl" ||
+         name == "rt" || name == "gcc" || name == "gcc_s" || name == "resolv";
+}
+
+// Derive omit-stem from libFOO.so(.N)* for launcher-omit / non-lib* filtering.
+// Returns empty if the name does not match lib*.so*.
+static StringRef cbcOmitStem(StringRef soName, SmallString<64> &storage) {
+  storage.clear();
+  if (!soName.starts_with("lib"))
+    return {};
+  StringRef rest = soName.drop_front(3);
+  size_t soPos = rest.find(".so");
+  if (soPos == StringRef::npos)
+    return {};
+  StringRef stem = rest.take_front(soPos);
+  StringRef after = rest.drop_front(soPos + 3);
+  // after is empty, or .<digits>(.<digits>)*
+  while (after.starts_with(".")) {
+    after = after.drop_front(1);
+    if (after.empty() || !llvm::isDigit(after.front()))
+      return {};
+    while (!after.empty() && llvm::isDigit(after.front()))
+      after = after.drop_front(1);
+  }
+  if (!after.empty())
+    return {};
+  storage = stem;
+  return storage;
+}
+
+static void makeCBCRequest(Ctx &ctx, SmallVectorImpl<MemoryBufferRef> &wholeMods,
+                           SmallVectorImpl<StringRef> &lazyArchives,
+                           SmallVectorImpl<StringRef> &aotDeps,
+                           Triple &triple) {
+  wholeMods.clear();
+  lazyArchives.clear();
+  aotDeps.clear();
+
+  for (BitcodeFile *f : ctx.bitcodeFiles)
+    wholeMods.push_back(f->mb);
+
+  DenseSet<StringRef> seenArchives;
+  for (const std::pair<StringRef, unsigned> &af : ctx.driver.archiveFiles) {
+    if (seenArchives.insert(af.first).second)
+      lazyArchives.push_back(af.first);
+  }
+
+  // Needed SharedFile SONAMEs first (S3), then unresolved -l stems.
+  DenseSet<StringRef> seenSonames;
+  SmallString<64> stemStorage;
+  for (SharedFile *f : ctx.sharedFiles) {
+    if (!f->isNeeded)
+      continue;
+    StringRef token = f->soName;
+    if (token.empty())
+      token = path::filename(f->getName());
+    StringRef stem = cbcOmitStem(token, stemStorage);
+    if (stem.empty() || isLauncherHostLib(stem))
+      continue;
+    if (seenSonames.insert(token).second)
+      aotDeps.push_back(ctx.saver.save(token));
+  }
+  for (StringRef stem : ctx.driver.cbcNativeStems)
+    aotDeps.push_back(stem);
+
+  if (!ctx.bitcodeFiles.empty() && ctx.bitcodeFiles.front()->obj)
+    triple = Triple(ctx.bitcodeFiles.front()->obj->getTargetTriple());
+  else
+    triple = Triple();
+}
 
 ELFSyncStream elf::Log(Ctx &ctx) { return {ctx, DiagLevel::Log}; }
 ELFSyncStream elf::Msg(Ctx &ctx) { return {ctx, DiagLevel::Msg}; }
@@ -236,6 +313,10 @@ void LinkerDriver::addFile(StringRef path, bool withLOption) {
   MemoryBufferRef mbref = *buffer;
 
   if (ctx.arg.formatBinary) {
+    if (ctx.arg.cbcMode) {
+      Err(ctx) << "CBC links LLVM bitcode, not binary inputs: '" << path << "'";
+      return;
+    }
     loadJobs.push_back({mbref,
                         path,
                         LoadJob::Binary,
@@ -259,13 +340,22 @@ void LinkerDriver::addFile(StringRef path, bool withLOption) {
       kind = LoadJob::Archive;
       break;
     case file_magic::elf_relocatable:
+      if (ctx.arg.cbcMode) {
+        // Host ET_REL from scripts / -l (e.g. libc_nonshared.a) must be
+        // dropped. A user positional .o is an error.
+        if (fromScript || withLOption)
+          return;
+        Err(ctx) << "CBC links LLVM bitcode, not ELF objects: '" << path
+                 << "'";
+        return;
+      }
       kind = LoadJob::Obj;
       break;
     case file_magic::bitcode:
       kind = LoadJob::Bitcode;
       break;
     case file_magic::elf_shared_object:
-      if (ctx.arg.isStatic) {
+      if (ctx.arg.isStatic && !ctx.arg.cbcMode) {
         Err(ctx) << "attempted static link of dynamic object " << path;
         return;
       }
@@ -302,9 +392,15 @@ void LinkerDriver::addFile(std::unique_ptr<ELFFileBase> ef) {
 void LinkerDriver::addLibrary(StringRef name) {
   if (std::optional<std::string> path = searchLibrary(ctx, name))
     addFile(ctx.saver.save(*path), /*withLOption=*/true);
-  else
+  else if (ctx.arg.cbcMode) {
+    // Match cbc-ld: missing bitcode archive becomes a native aotDeps stem
+    // (unless the launcher already provides it).
+    if (!isLauncherHostLib(name))
+      cbcNativeStems.push_back(ctx.saver.save(name));
+  } else {
     ctx.e.error("unable to find library -l" + name, ErrorTag::LibNotFound,
                 {name});
+  }
 }
 
 // This function is called on startup. We need this for LTO since
@@ -1439,8 +1535,21 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
   ctx.arg.debugNames = args.hasFlag(OPT_debug_names, OPT_no_debug_names, false);
   ctx.arg.demangle = args.hasFlag(OPT_demangle, OPT_no_demangle, true);
   ctx.arg.dependencyFile = args.getLastArgValue(OPT_dependency_file);
+  ctx.arg.cbcMode = args.hasArg(OPT_cbc);
+  ctx.arg.cbcCrt = args.getLastArgValue(OPT_crt);
+  if (!ctx.arg.cbcMode) {
+    if (args.hasArg(OPT_crt))
+      ErrAlways(ctx) << "--crt may only be used with --cbc";
+    if (args.hasArg(OPT_no_native_validation))
+      ErrAlways(ctx) << "--no-native-validation may only be used with --cbc";
+  }
+  // --no-native-validation is accepted and ignored (P12).
+  (void)args.hasArg(OPT_no_native_validation);
+
   ctx.arg.dependentLibraries =
       args.hasFlag(OPT_dependent_libraries, OPT_no_dependent_libraries, true);
+  if (ctx.arg.cbcMode)
+    ctx.arg.dependentLibraries = false;
   ctx.arg.disableVerify = args.hasArg(OPT_disable_verify);
   ctx.arg.discard = getDiscard(args);
   ctx.arg.dtltoDistributor = args.getLastArgValue(OPT_thinlto_distributor_eq);
@@ -2106,7 +2215,7 @@ static void setConfigs(Ctx &ctx, opt::InputArgList &args) {
   if (ctx.arg.entry.empty() && !ctx.arg.relocatable)
     ctx.arg.entry = ctx.arg.emachine == EM_MIPS ? "__start" : "_start";
   if (ctx.arg.outputFile.empty())
-    ctx.arg.outputFile = "a.out";
+    ctx.arg.outputFile = ctx.arg.cbcMode ? "a.cbc" : "a.out";
 
 }
 
@@ -2172,6 +2281,13 @@ void LinkerDriver::loadFiles() {
         bool lazy = !job.inWholeArchive;
         for (const auto &[mb, offset] : members) {
           auto mm = identify_magic(mb.getBuffer());
+          if (ctx.arg.cbcMode) {
+            // CBC: only bitcode members. Skip host ET_REL silently
+            // (e.g. libc_nonshared.a dragged by libc.so GROUP).
+            if (mm == file_magic::bitcode)
+              job.out.push_back(makeFile(mb, mm, job.path, offset, lazy));
+            continue;
+          }
           if (mm == file_magic::elf_relocatable || mm == file_magic::bitcode ||
               job.inWholeArchive)
             job.out.push_back(makeFile(mb, mm, job.path, offset, lazy));
@@ -2231,6 +2347,11 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
   // -r implies -Bstatic and has precedence over -Bdynamic.
   ctx.arg.isStatic = ctx.arg.relocatable;
 
+  // CBC: crt is linked whole, first (only injection of --crt).
+  if (ctx.arg.cbcMode && !ctx.arg.cbcCrt.empty()) {
+    addFile(ctx.arg.cbcCrt, /*withLOption=*/false);
+  }
+
   // Iterate over argv to process input files and positional arguments.
   std::optional<MemoryBufferRef> defaultScript;
   nextGroupId = 0;
@@ -2278,6 +2399,14 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
     case OPT_Bstatic:
     case OPT_omagic:
     case OPT_nmagic:
+      if (ctx.arg.cbcMode) {
+        if (!ctx.arg.cbcWarnedStatic) {
+          Warn(ctx) << "-static/-Bstatic ignored in --cbc mode "
+                       "(native libraries are always DSOs)";
+          ctx.arg.cbcWarnedStatic = true;
+        }
+        break;
+      }
       ctx.arg.isStatic = true;
       break;
     case OPT_Bdynamic:
@@ -3301,6 +3430,26 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
     ctx.symtab->addUnusedUndefined(name)->referenced = true;
 
   parseFiles(ctx, files);
+
+  // CBC mode: resolve inputs with ELF machinery, then emit a .cbc and skip
+  // LTO / Writer. Must not reuse skipLinkedOutput (that still runs LTO).
+  if (ctx.arg.cbcMode) {
+    if (errCount(ctx))
+      return;
+    SmallVector<MemoryBufferRef, 0> wholeMods;
+    SmallVector<StringRef, 0> lazyArchives;
+    SmallVector<StringRef, 0> aotDeps;
+    Triple triple;
+    makeCBCRequest(ctx, wholeMods, lazyArchives, aotDeps, triple);
+    cbc::CBCLinkRequest req;
+    req.wholeModules = wholeMods;
+    req.lazyArchives = lazyArchives;
+    req.aotDeps = aotDeps;
+    req.outputPath = ctx.arg.outputFile;
+    req.triple = triple;
+    cbc::link(req);
+    return;
+  }
 
   // ICF is incompatible with dynamic debugging: the inner ELF references outer
   // symbols that folding would merge away.

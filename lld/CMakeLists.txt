@@ -209,6 +209,7 @@ endif()
 
 add_subdirectory(docs)
 add_subdirectory(COFF)
+add_subdirectory(CBC)
 add_subdirectory(ELF)
 add_subdirectory(MachO)
 add_subdirectory(MinGW)

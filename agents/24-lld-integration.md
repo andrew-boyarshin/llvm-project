@@ -735,10 +735,10 @@ Call it **~2 weeks**, not the 5–9 engineer-weeks of a wasm-style flavor.
 
 ## 16. Follow-ups (not this design)
 
-* Native ELF/Mach-O libraries with the `.cbc` embedded, `@C`-style N2C
-  stubs, and in-process wrap when `-o` is not `.cbc`:
-  `25-cbc-native-libraries.md`. That document is authoritative over this
-  file’s “CBC mode never runs `Writer`” for the wrap product only.
+* Native ELF/Mach-O **shared libraries** with the `.cbc` embedded, `@C`-style
+  N2C stubs, in-process wrap for `-shared`, and launcher `dlopen` of that
+  DSO: `25-cbc-native-libraries.md`. That document is authoritative over
+  this file’s “CBC mode never runs `Writer`” for the wrap product only.
 * Host triple + `-fcbc`, `long double` policy, `__attribute__((cbc_native))`:
   `26-cbc-as-native-flavor.md`. **Out of this work.** The only `26`
   constraint here is §10.2 (do not look up the TargetMachine from the

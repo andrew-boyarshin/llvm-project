@@ -1934,6 +1934,7 @@ void ScriptParser::readMemoryAttributes(uint32_t &flags, uint32_t &invFlags,
 void elf::readLinkerScript(Ctx &ctx, MemoryBufferRef mb) {
   llvm::TimeTraceScope timeScope("Read linker script",
                                  mb.getBufferIdentifier());
+  SaveAndRestore saveFromScript(ctx.driver.fromScript, true);
   ScriptParser(ctx, mb).readLinkerScript();
 }
 

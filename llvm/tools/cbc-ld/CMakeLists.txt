@@ -1,26 +1,3 @@
-set(LLVM_LINK_COMPONENTS
-  AllTargetsAsmParsers
-  AllTargetsCodeGens
-  AllTargetsDescs
-  AllTargetsInfos
-  Analysis
-  BitReader
-  Core
-  Object
-  IPO
-  IRReader
-  Linker
-  MC
-  Passes
-  ScalarOpts
-  Support
-  Target
-  TargetParser
-  TransformUtils
-  )
-
-add_llvm_tool(cbc-ld cbc-ld.cpp)
-
 set(CBC_LIB_DIR ${LLVM_LIBRARY_DIR}/cbc)
 set(CBC_CRT_BC ${CBC_LIB_DIR}/crt-cbc.bc)
 set(CBC_CATCH_STUB_BC ${CBC_LIB_DIR}/cbc_can_catch_stub.bc)
@@ -43,8 +20,10 @@ add_custom_command(
           -o ${CBC_CATCH_STUB_BC}
   DEPENDS clang ${CMAKE_CURRENT_SOURCE_DIR}/crt/cbc_can_catch_stub.c
   VERBATIM)
-add_custom_target(crt-cbc DEPENDS ${CBC_CRT_BC} ${CBC_CATCH_STUB_BC})
-add_dependencies(cbc-ld crt-cbc)
+add_custom_target(crt-cbc ALL DEPENDS ${CBC_CRT_BC} ${CBC_CATCH_STUB_BC})
+if(TARGET lld)
+  add_dependencies(lld crt-cbc)
+endif()
 install(FILES ${CBC_CRT_BC} ${CBC_CATCH_STUB_BC} DESTINATION lib/cbc)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/crt/unwind.h DESTINATION lib/cbc/include)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/crt/include/bits/floatn.h

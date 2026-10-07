@@ -238,6 +238,10 @@ public:
   bool isInGroup;
   std::unique_ptr<InputFile> armCmseImpLib;
   SmallVector<std::pair<StringRef, unsigned>, 0> archiveFiles;
+  // Unresolved -l stems for CBC aotDeps (not found as file; not launcher-omitted).
+  SmallVector<StringRef, 0> cbcNativeStems;
+  // True while reading a linker script (INPUT/GROUP/etc.).
+  bool fromScript = false;
 };
 
 // This struct contains the global configuration for the linker.
@@ -332,6 +336,9 @@ struct Config {
   bool armCMSESupport = false;
   bool asNeeded = false;
   bool armBe8 = false;
+  bool cbcMode = false;
+  llvm::StringRef cbcCrt;
+  bool cbcWarnedStatic = false;
   BsymbolicKind bsymbolic = BsymbolicKind::None;
   CGProfileSortKind callGraphProfileSort;
   llvm::StringRef irpgoProfilePath;

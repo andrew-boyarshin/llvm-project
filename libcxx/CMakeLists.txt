@@ -321,7 +321,7 @@ if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
       "(agents/15-threads.md). pthread_key_create would register a CBC destructor.")
   endif()
   set(LIBCXX_ENABLE_ABI_LINKER_SCRIPT OFF CACHE BOOL
-      "cbc-ld is not a GNU linker." FORCE)
+      "ld.lld --cbc is not a GNU linker." FORCE)
   set(LIBCXX_USE_COMPILER_RT ON CACHE BOOL
       "CBC uses compiler-rt builtins." FORCE)
 endif()

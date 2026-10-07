@@ -9,7 +9,7 @@ namespace tools {
 namespace cbc {
 class LLVM_LIBRARY_VISIBILITY Linker : public Tool {
 public:
-  Linker(const ToolChain &TC) : Tool("cbc::Linker", "cbc-ld", TC) {}
+  Linker(const ToolChain &TC) : Tool("cbc::Linker", "ld.lld", TC) {}
   bool hasIntegratedCPP() const override { return false; }
   bool isLinkJob() const override { return true; }
   void ConstructJob(Compilation &C, const JobAction &JA,
@@ -42,6 +42,7 @@ public:
   std::string getMultiarchTriple(const Driver &D,
                                  const llvm::Triple &TargetTriple,
                                  StringRef SysRoot) const override;
+  const char *getDefaultLinker() const override { return "ld.lld"; }
 
 protected:
   Tool *buildLinker() const override { return new tools::cbc::Linker(*this); }

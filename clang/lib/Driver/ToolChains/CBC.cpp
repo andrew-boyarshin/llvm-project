@@ -10,10 +10,21 @@ using namespace clang::driver::toolchains;
 using namespace clang::driver::tools;
 using namespace clang;
 using namespace llvm::opt;
+using tools::addPathIfExists;
 
 CBCToolChain::CBCToolChain(const Driver &D, const llvm::Triple &Triple,
                            const ArgList &Args)
-    : Linux(D, Triple, Args) {}
+    : Linux(D, Triple, Args) {
+  // Linux::Linux fills FilePaths during the base ctor, before this object
+  // exists, so our getMultiarchTriple override is not used for -L. Add the
+  // host multiarch lib dirs so -lncurses finds libncurses.so (often a linker
+  // script under /usr/lib/x86_64-linux-gnu).
+  std::string SysRoot = computeSysRoot();
+  std::string MT = getMultiarchTriple(D, Triple, SysRoot);
+  path_list &Paths = getFilePaths();
+  addPathIfExists(D, concat(SysRoot, "/lib", MT), Paths);
+  addPathIfExists(D, concat(SysRoot, "/usr/lib", MT), Paths);
+}
 
 std::string CBCToolChain::getMultiarchTriple(const Driver &D,
                                              const llvm::Triple &TargetTriple,
@@ -93,6 +104,8 @@ void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
                                const InputInfoList &Inputs, const ArgList &Args,
                                const char *) const {
   ArgStringList CmdArgs;
+  // --cbc must be first so ELF option parsing selects CBC mode.
+  CmdArgs.push_back("--cbc");
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());
 
@@ -102,14 +115,19 @@ void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.push_back(Args.MakeArgString(Crt));
   CmdArgs.push_back("--no-native-validation");
 
-  AddLinkerInputs(getToolChain(), Inputs, Args, CmdArgs, JA);
-
   SmallString<256> CbcLib(getToolChain().getDriver().Dir);
   llvm::sys::path::append(CbcLib, "..", "lib", "cbc");
   SmallString<256> LibDir(CbcLib);
   llvm::sys::path::append(LibDir, "lib");
+  // -L before -l: ELF lld resolves libraries in argv order. CBC lib first
+  // so -lc++ finds bitcode libc++.a before any host libc++.so.
   CmdArgs.push_back("-L");
   CmdArgs.push_back(Args.MakeArgString(LibDir));
+  Args.addAllArgs(CmdArgs, {options::OPT_L});
+  getToolChain().AddFilePathLibArgs(Args, CmdArgs);
+
+  AddLinkerInputs(getToolChain(), Inputs, Args, CmdArgs, JA);
+
   if (getToolChain().ShouldLinkCXXStdlib(Args)) {
     CmdArgs.push_back("-lc++");
     CmdArgs.push_back("-lc++abi");
@@ -122,8 +140,8 @@ void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   llvm::sys::path::append(Builtins, "libclang_rt.builtins-cbc.a");
   CmdArgs.push_back(Args.MakeArgString(Builtins));
 
-  const char *Prog =
-      Args.MakeArgString(getToolChain().GetProgramPath("cbc-ld"));
+  // Do not call gnutools::Linker::ConstructJob (crt1.o, -dynamic-linker, -lc).
+  const char *Prog = Args.MakeArgString(getToolChain().GetLinkerPath());
   C.addCommand(std::make_unique<Command>(
       JA, *this, ResponseFileSupport::None(), Prog, CmdArgs, Inputs, Output));
 }

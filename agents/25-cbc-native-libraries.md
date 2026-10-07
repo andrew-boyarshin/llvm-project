@@ -3,17 +3,22 @@
 Depends on `24-lld-integration.md` (CBC emit lives in `lld/CBC`, selected by
 `--cbc`). Authoritative over `24` §4 / §6.1 / §10.3 where they say CBC mode
 never runs ELF `Writer` and always writes a `.cbc`. Authoritative over
-`07-ir-passes.md` §2 for library entries (no `main`). Authoritative over
-`04-architecture.md` §7.3 / `10-linker-and-runtime.md` §5.5–§5.6 /
-`13-engine-changes.md` §8 for **exported and address-taken** functions only:
-those become native-callable `@C`-style stubs. Internal CBC function pointers
-stay E5 descriptors.
+`07-ir-passes.md` §2 for **pure** library entries (no `__cbc_main`): those
+use `__cbc_lib_start` and `mainTypeName = −1`. When the link **has** a C
+`main`, the wrapped blob keeps `Entry.main` (§4, §4.1) so the launcher can
+run it after `dlopen`. Authoritative over `04-architecture.md` §7.3 /
+`10-linker-and-runtime.md` §5.5–§5.6 / `13-engine-changes.md` §8 for
+**exported and address-taken** functions only: those become native-callable
+`@C`-style stubs. Internal CBC function pointers stay E5 descriptors.
 
-`26-cbc-as-native-flavor.md` extends this: host triple + `-fcbc`, then
-`__attribute__((cbc_native))`. This work is the wrap product only. It does
-**not** split the linked module into CBC vs native functions, and it does
-not implement `cbc_native`. Clang invoke is `-fcbc` on the host triple
-(same as `24` §11 / `26`); do not write `--target=cbc_*`.
+Delivery is two stages (§12): **25a** wrap blob + ctor + `launcher` on
+`.cbc`/`.so`; **25b** native ELF symbols (N2C stubs) for CBC exports.
+`26-cbc-as-native-flavor.md` extends this further (**26a** / **26b**). This
+work does **not** implement `cbc_native`. Clang invoke is `-fcbc` on the
+host triple (same as `24` §11 / `26`); do not write `--target=cbc_*`.
+
+The engine distribution’s runner is **`launcher`**
+(`cbc-engine-initial-stage/tools/launcher/`), not `cbc-run`.
 
 Cangjie reference (the lowering to copy, not a dependency of the LLVM tree):
 
@@ -33,16 +38,16 @@ Stubs are ordinary host LLVM functions whose bodies are inline assembly
 ## 0. Goal
 
 After `24`, `ld.lld --cbc -o a.cbc` produces a CBC container the launcher
-loads. This work makes the **same** `--cbc` invocation produce a host
-artifact when the output name is not `.cbc`:
+loads. This work makes the **same** `--cbc` invocation produce a **host
+artifact** when the output name is not `.cbc`:
 
 ```
-ld.lld --cbc -o a.cbc          →  CBC container          (today, 24)
+ld.lld --cbc -o a.cbc              →  CBC container          (today, 24)
 ld.lld --cbc -shared -o libfoo.so
 ld.lld --cbc -dylib  -o libfoo.dylib
 ld.lld --cbc --lto-emit-llvm -o libfoo.bc
 ld.lld --cbc -r -o foo.o
-                               →  host ELF / Mach-O / bitcode
+                               →  host ELF / Mach-O / bitcode / relocatable
                                   with the .cbc as a byte array,
                                   a constructor that loads it,
                                   and native stubs for exports
@@ -53,6 +58,13 @@ There is **no** user-visible wrap tool, no second `ld.lld` process, and no
 linker decides the product from `-o` plus the ordinary host flags
 (`-shared`, `-dylib`, `-r`, `--lto-emit-llvm`).
 
+**Runnable by the launcher** (§4.1): `.cbc` and ELF/Mach-O **shared
+libraries** only (`launcher a.cbc` or `launcher libfoo.so`). Host bitcode
+(`.bc`), static archives (`.a`), and relocatables (`-r`) are packaging /
+LTO inputs — the existing launcher does not run them. **Host executable**
+wrap (`-o a.out` without `-shared`) remains out of scope; use `.cbc` or a
+DSO.
+
 Success:
 
 1. Every program that links to `a.cbc` today still does, byte-compatible
@@ -61,10 +73,13 @@ Success:
    produces an ELF DSO whose `.cbc` payload loads on first use of the DSO,
    and whose default-visibility / address-taken functions are C-ABI symbols
    native code can call.
-3. The same DSO (or a static archive of host bitcode) is **LLVM LTO-ready**:
-   unused stubs are IR functions and die under internalization + GlobalDCE;
-   the payload is kept only if something in the module is kept.
-4. Mach-O is in scope for the wrap product (`-dylib`, `__mod_init_func`).
+3. If that DSO’s CBC image has a `main`, `launcher libfoo.so …` runs it the
+   same way as `launcher a.cbc` (§4.1) — no exported “run main” symbol, no
+   host `main` shim.
+4. The same wrap module as a static archive of host bitcode (or
+   `--lto-emit-llvm`) is **LLVM LTO-ready**: unused stubs are IR functions
+   and die under internalization + GlobalDCE.
+5. Mach-O is in scope for the wrap product (`-dylib`, `__mod_init_func`).
    Darwin **resolution** of TBD/dylib inputs is still the `24` follow-up
    (`ld64.lld --cbc` as a mode of the Mach-O driver). Until that exists,
    Linux ELF is the wrap that must ship; the wrapper IR is flavor-neutral.
@@ -80,7 +95,7 @@ It does **not** forbid a later, in-process step that:
 1. already has a finished `.cbc` in memory from `lld::cbc::link`,
 2. builds a **host-triple** LLVM module (blob + ctor + stubs),
 3. either emits that module as bitcode, or codegens it to a host object and
-   **then** runs the flavor `Writer` on *that* object.
+   **then** runs the flavor `Writer` on *that* object (DSO or relocatable).
 
 Running `Writer` on CBC IR would be wrong. Running `Writer` on a host
 wrapper that *contains* CBC bytes is ordinary native linking. Putting both
@@ -100,15 +115,15 @@ Do **not** add `--oformat=cbc`. `OUTPUT_FORMAT(elf64-x86-64)` inside
 
 `--cbc` is set. Then:
 
-| `-o` name | Other flags | Product |
-|---|---|---|
-| `*.cbc`, or `-o` omitted (default `a.cbc`) | | CBC container (`24` P13). Host flags `-shared`/`-r` are errors. |
-| `*.bc` or `*.ll`, or `--lto-emit-llvm` | | Host-triple LLVM bitcode of the wrapper. Static-lib LTO input. |
-| `*.so`, or `-shared` | ELF driver | ELF DSO. `.so` without `-shared` implies `-shared` (warn once). |
-| `*.dylib` / `*.tbd` output, or `-dylib` | Mach-O driver | Mach-O dylib. |
-| `*.a` | | `llvm-ar` of one host bitcode member (LTO-ready static lib). A thin archive of a single relocatable is acceptable if bitcode emit is off. |
-| `*.o` / `*.obj`, or `-r` | | Host relocatable. |
-| anything else (`a.out`, no extension, `*.exe`) | | Host **executable**: same wrapper, plus a `main` that N2C-calls the CBC entry if the `.cbc` has one. |
+| `-o` name | Other flags | Product | Launcher |
+|---|---|---|---|
+| `*.cbc`, or `-o` omitted (default `a.cbc`) | | CBC container (`24` P13). Host flags `-shared`/`-r` are errors. | `launcher a.cbc` |
+| `*.bc` or `*.ll`, or `--lto-emit-llvm` | | Host-triple LLVM bitcode of the wrapper. Static-lib LTO input. | no |
+| `*.so`, or `-shared` | ELF driver | ELF DSO. `.so` without `-shared` implies `-shared` (warn once). | `launcher lib.so` (§4.1) |
+| `*.dylib` / `*.tbd` output, or `-dylib` | Mach-O driver | Mach-O dylib. | later (`dlopen`) |
+| `*.a` | | `llvm-ar` of one host bitcode member (LTO-ready static lib). A thin archive of a single relocatable is acceptable if bitcode emit is off. | no |
+| `*.o` / `*.obj`, or `-r` | | Host relocatable. | no |
+| anything else (`a.out`, no extension, `*.exe`) | | **Error** in v1. No host-executable wrap; use `.cbc` or `-shared`. | — |
 
 The CBC bytes are always produced first. The wrap is a function of the
 output kind, not a different IR-link.
@@ -133,7 +148,7 @@ lld::elf::link  (or later lld::macho::link)
         ▼
 lld::cbc::linkToMemory(request)     // same body as 24, bytes not a file
         │  IR-link, O2, policy, CBC codegen
-        │  returns { cbcBytes, exportSet, triple, aotDeps }
+        │  returns { cbcBytes, exportSet, triple, aotDeps, hasMain }
         │
         ├─ product is .cbc  →  write bytes, return
         │
@@ -147,8 +162,8 @@ build host-triple Module            // lld/CBC, still no elf::Ctx
 host codegen (X86/AArch64 TargetMachine; CBC bytes came from CBC TM, 24 §10.2)
         │  one relocatable object in memory
         ▼
-re-enter flavor Writer              // now it is a native link of 1 object
-        │  -shared / -dylib / executable
+re-enter flavor Writer              // native link of 1 object
+        │  -shared / -dylib / -r
         │  DT_NEEDED / LC_LOAD_DYLIB: libcbcengine, Cangjie runtime,
         │  plus request.aotDeps
         └─ write ELF / Mach-O
@@ -163,33 +178,95 @@ Host codegen may use the in-process LLVM that lld already links. It must
 *inputs*, which we skipped). The wrapper module is synthesized, not an
 input.
 
-## 4. What the `.cbc` inside a library is
+## 4. What the `.cbc` inside a shared library is
 
-Whole-program CBC of **this** link, same as an executable `.cbc`:
+Whole-program CBC of **this** link:
 
 * one data image, one `$cbc.<prog>` name (output stem + hash, `10` §2.3)
 * `aotDeps` from needed `SharedFile` SONAMEs (`24` §8)
-* crt, legalizer, image init — unchanged
+* crt, legalizer — unchanged
 
-Differences from an executable `.cbc`:
+Whether the blob is “a program” or “a pure library” depends on whether the
+link defines `__cbc_main` (the user’s `main`):
 
-| | Executable `.cbc` | Library `.cbc` |
-|---|---|---|
-| `mainTypeName` | `Entry.main` | **−1** (`07` §2) |
-| Startup method | `Entry.main`: probes, image init, ctors, `__cbc_main`, exit handlers | `__cbc_lib_start`: probes, image init, `llvm.global_ctors` only |
-| Who calls it | launcher trampoline | host constructor, through `CJ_MCC_N2CStub` / `InitCJLibraryStub` |
-| Shutdown | process exit / CBC `exit` | `.fini_array` / `__cxa_finalize(&__dso_handle)` on `dlclose` |
-| Function pointers of exports | E5 descriptor | **host stub address** (§6) |
+| | Container `.cbc` (launcher file) | DSO wrap, **has** `__cbc_main` | DSO wrap, **no** `main` |
+|---|---|---|---|
+| `mainTypeName` | `Entry.main` | `Entry.main` (same) | **−1** |
+| Host ctor | n/a | `load_buffer` + N2C `__cbc_lib_start` | same |
+| `__cbc_lib_start` | n/a (folded into `Entry.main`) | probes, image init, `llvm.global_ctors` only | same |
+| `Entry.main` | probes, image init, ctors, `__cbc_main`, exit handlers | **`__cbc_args` / `__cbc_main` / exit handlers only** — no second image init / ctor pass | absent |
+| Who runs `Entry.main` | launcher trampoline after `Load(path)` | launcher trampoline after `dlopen` (§4.1) | nobody |
+| Shutdown | process exit / CBC `exit` | same when run via launcher; else `.fini_array` on `dlclose` | `.fini_array` / `__cxa_finalize` |
+| Function pointers of exports | E5 descriptor | **host stub address** (§6) | same |
 
 `__cbc_lib_start` still contains the dead `ld.fnptr @abort` and `ld.fcb`
 probes so an unpatched engine fails while rewriting the library entry,
-before any export runs.
+before any export (or `Entry.main`) runs.
+
+**Do not double-init.** When both `__cbc_lib_start` and `Entry.main` exist,
+image init and `llvm.global_ctors` run **only** in `__cbc_lib_start` (DSO
+ctor). `Entry.main` is the “run program” half. The container `.cbc` path
+keeps today’s single `Entry.main` that does both (no host ctor).
 
 Per-DSO `__dso_handle`: the wrap module defines a unique object; CBC
 `__cxa_atexit` registrations from this blob use that pointer. The host
 destructor calls `__cxa_finalize` via N2C (or a small CBC helper). Today’s
 single-handle crt (`10` §5.2) is a process-wide executable assumption and
 must be generalized.
+
+### 4.1 Execution: launcher accepts `.cbc` and ELF DSOs
+
+Today’s launcher (`cbc-engine-initial-stage/tools/launcher/launcher.c`):
+
+1. `engine_set_main_cbc(path)` — first non-option argument.
+2. `InitCJRuntime` / `InitCJInterpreter` / `SetCJCommandLineArgs`.
+3. `engine_initialize()` → `Loader::Load` of that path as a CBC file, `Build`.
+4. `engine_get_entrypoint_trampoline()` → `FindMain(session, g_mainCbc)` via
+   `mainTypeName`, then `RunCJTask`.
+
+There is **no** ELF `main` and **no** exported “run main” symbol. Entry is
+always the CBC `Entry.main` trampoline.
+
+**Extended launcher** (same binary):
+
+```
+init_cangjie_runtime(arg_count);   // argv as today
+
+if (file_starts_with_elf_magic(path)) {   // 0x7F 'E' 'L' 'F'
+  // Do NOT Loader::Load(path) as CBC — it is not a CBC file.
+  dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+  // DSO ctor: cbc_engine_ensure_init + load_buffer(name=path) + __cbc_lib_start
+} else {
+  g_engine.set_main_cbc(path);
+  g_engine.initialize();              // existing Load + Build
+}
+
+return run_interpreter_in_managed_ctx();  // get_trampoline → FindMain → RunCJTask
+```
+
+Recognizing ELF is magic-byte sniff only. No need to parse dynamic sections
+to “run.”
+
+**`FindMain` after `dlopen`:** `load_buffer` must register the image under
+`name` equal to the path the launcher passed (realpath of the `.so`).
+`engine_set_main_cbc` for an ELF path still sets `g_mainCbc` to that string
+so `FindMain(session, g_mainCbc)` finds the buffer-loaded file. Alternatively
+`FindMain` may mean “the unique loaded image with `mainTypeName` set” when
+exactly one such image exists — path registration is simpler and matches
+today.
+
+**Ctor vs launcher init order:** the launcher owns `InitCJRuntime` first.
+The DSO ctor’s `cbc_engine_ensure_init` must be idempotent when the runtime
+is already up (`25` §5). Do not call today’s `initialize()` path that opens
+`g_mainCbc` as a CBC file when the path is ELF.
+
+**Pure plugin (no `main`):** `launcher libplugin.so` → `dlopen` succeeds,
+ctor loads CBC, `FindMain` fails → error (same as a missing trampoline
+today). Plugins are for `dlopen` + stubs from another process, not
+`launcher`.
+
+**No host executable wrap.** `./myapp` as a CBC product is out of scope; use
+`launcher a.cbc` or `launcher libapp.so`.
 
 ## 5. Engine API (cbc-engine)
 
@@ -202,10 +279,12 @@ Required exports (names indicative):
 
 ```c
 // Idempotent. Starts Cangjie runtime + interpreter_bridge_init if needed.
+// Safe when the launcher already called InitCJRuntime.
 void cbc_engine_ensure_init(void);
 
 // Install a CBC image that outlives the call (DSO mapping). Safe after
 // the engine already exists (dlopen of a second CBC library).
+// `name` is the identity FindMain / aotDeps use (launcher: path of the .so).
 int  cbc_engine_load_buffer(const void *bytes, size_t n, const char *name);
 
 // After load: DynamicFunctionHandle* for $cbc.<prog>:Prog.<method>
@@ -220,7 +299,9 @@ no-op.
 `GetDirectCallTrampoline` (`TRAMPOLINE_COUNT = 1024`) is **not** used for
 exports. E5 exists so C programs are not capped there. Each export has its
 own enter thunk in the wrapper (§7) that loads a `fuh` slot and jumps to
-`engine_all_regs_c2i_call` / `engine_iregs_only_c2i_call`.
+`engine_all_regs_c2i_call` / `engine_iregs_only_c2i_call`. The **program**
+entry still uses `engine_get_entrypoint_trampoline` / `FindMain` as today
+(§4.1).
 
 ### 5.1 Native→CBC is in scope for stubs
 
@@ -262,6 +343,10 @@ Cangjie uses an explicit `@C`. C/C++ equivalent, after LTO of the CBC IR:
 
 Clang attribute (optional, later): `__attribute__((cbc_export))` as a
 forced stub, matching `@C`.
+
+`__cbc_main` / `Entry.main` are **not** ELF-exported stubs. The launcher
+enters them through `FindMain` + the existing trampoline, not through a
+host `main` or an exported “run main” symbol.
 
 Internal-only functions keep E5 descriptors. A function that is both
 called indirectly from CBC and passed to native has **one** identity: the
@@ -348,8 +433,7 @@ them. Two-register returns: N2CStub already restores `rax`/`rdx`/`xmm0-1`
 
 Do **not** implement stubs by porting `emitCangjieCallStubInstImpl` into
 upstream unless a later change needs the `"cjstub"` IR contract for some
-other reason. Naked asm keeps the host backends stock, which is what LTO
-codegen of a consumer’s `-flto` link will use.
+other reason. Naked asm keeps the host backends stock.
 
 ### 7.3 Constructor and comdat GC
 
@@ -357,9 +441,7 @@ codegen of a consumer’s `-flto` link will use.
 define internal void @__cbc_lib_init() {
   call void @cbc_engine_ensure_init()
   call void @cbc_engine_load_buffer(ptr @__cbc_blob.<id>, i64 N, ptr @.name)
-  ; per surviving stub (see below):
-  %h = call ptr @cbc_engine_lookup(ptr @.name, ptr @.foo)
-  store ptr %h, ptr @foo.fuh
+  ; .name is the DSO path / SONAME identity the launcher also passes to FindMain
   ; N2C into __cbc_lib_start  (InitCJLibraryStub: push callee, push 0, call N2C)
   ret void
 }
@@ -408,12 +490,13 @@ ordinary host relocations. Naked asm must use the platform’s PIC idiom
 ## 8. LTO
 
 CBC bytecode is opaque. “LTO ready” means the **wrapper** is host bitcode.
+A finished DSO is not re-LTO’d by consumers; a `.a` / `.bc` of the wrap is.
 
-| Output | LTO sees | Can do | Cannot do |
-|---|---|---|---|
-| Static `.a` of host bitcode | stubs, ctor, blob constant | Internalize + DCE unused stubs; ICF identical enter thunks | GC individual CBC methods inside the array |
-| DSO built with `-flto` | same, at library build | Layout of ctor/stubs | Consumers LTO into the DSO (unless a bitcode sidecar) |
-| `--lto-emit-llvm` / `.bc` | the wrap module | Input to a later `clang -flto` | — |
+| Output | LTO sees | Can do | Cannot do | Launcher |
+|---|---|---|---|---|
+| Static `.a` of host bitcode | stubs, ctor, blob constant | Internalize + DCE unused stubs; ICF identical enter thunks | GC individual CBC methods inside the array | no |
+| DSO built with `-flto` | same, at library build | Layout of ctor/stubs | Consumers LTO into the DSO (unless a bitcode sidecar) | yes (§4.1) |
+| `--lto-emit-llvm` / `.bc` | the wrap module | Input to a later `clang -flto` | — | no |
 
 ThinLTO: the blob is a huge constant; do not import it into every ThinLTO
 partition. Full LTO for the wrap, or keep the blob in a non-imported
@@ -437,6 +520,7 @@ still lives in `CBC.cpp`; the argv does not depend on that. Additions:
 | `-flto` / `-flto=full` | `--lto-emit-llvm` only when the **output** is a static lib / `.bc`; a DSO still wrap-codegens in lld |
 | `-fvisibility=hidden` | driver default for `-shared`/`-dynamiclib` |
 | `-static` | static archive of bitcode, not a static ELF exe |
+| `-r` | host relocatable wrap |
 
 Do **not** start calling `gnutools::Linker::ConstructJob` (crt1, `-z relro`).
 The wrap’s native `Writer` is invoked inside lld, not by clang emitting a
@@ -455,7 +539,9 @@ stub → N2C → C2I. Correct and slow. When both are static archives of
 AOT path is the ABI.
 
 Several blobs in one process: type names already include `<prog>`. Engine
-incremental `load_buffer` is what makes `dlopen` order work.
+incremental `load_buffer` is what makes `dlopen` order work. Only one
+loaded image should carry `mainTypeName` if `launcher` is to call
+`FindMain` unambiguously (or the launcher’s path names that image).
 
 ## 11. File-level change list
 
@@ -463,38 +549,100 @@ On top of `24`:
 
 | File | Change |
 |---|---|
-| `lld/CBC/CBCLink.h` | `linkToMemory`; `CBCLinkResult { bytes, exports, triple, aotDeps }` |
+| `lld/CBC/CBCLink.h` | `linkToMemory`; `CBCLinkResult { bytes, exports, triple, aotDeps, hasMain }` |
 | `lld/CBC/CBCWrap.cpp` **new** | host module: blob, `__cbc_lib_init`, naked stubs, comdat |
 | `lld/CBC/CBCWrapAsm.{x86_64,aarch64}.inc` | asm strings for N2C stub + enter thunk (PIC, ELF and Mach-O variants) |
-| `lld/ELF/Driver.cpp` | after `cbc::linkToMemory`: `.cbc` write **or** wrap then `Writer` |
+| `lld/ELF/Driver.cpp` | after `cbc::linkToMemory`: `.cbc` write **or** wrap DSO then `Writer` |
 | `lld/MachO/Driver.cpp` | same when `--cbc` exists |
-| `clang/lib/Driver/ToolChains/CBC.cpp` | `-shared`/`-dynamiclib`, visibility, no second linker |
-| `llvm/lib/Target/CBC` | `__cbc_lib_start`; `FNPTR64` of stubbed fns as host symbols; `mainTypeName = -1` |
-| `cbc-engine` | `ensure_init`, `load_buffer`, `lookup`; incremental load |
-| tests | `clang -shared` DSO called from native C; LTO static `.a` drops unused stub (IR check); engine-probe on library entry |
+| `clang/lib/Driver/ToolChains/CBC.cpp` | `-shared`/`-dynamiclib`, visibility, `-r` / `--lto-emit-llvm` / `-static` as wrap modes; no second linker |
+| `llvm/lib/Target/CBC` | `__cbc_lib_start`; split `Entry.main` when wrap+hasMain; `FNPTR64` of stubbed fns as host symbols; `mainTypeName = −1` only if no `__cbc_main` |
+| `cbc-engine` | `ensure_init`, `load_buffer(name)`, `lookup`; incremental load; `FindMain` by buffer name |
+| launcher | ELF magic → `dlopen` then trampoline; else existing `.cbc` path |
+| tests | `clang -shared` DSO from native C; `launcher libapp.so` with `main`; LTO static `.a` drops unused stub (IR check); pure plugin has no trampoline |
 
 No changes to in-tree X86/AArch64 asm printers.
 
-## 12. Implementation order
+## 12. Two delivery stages (25a / 25b)
 
-| Step | Work | Exit |
+This document describes one wrap design. **Ship it in two stages.** Stage 2
+adds native symbols (N2C stubs) for CBC functions; stage 1 does not.
+
+### 12.1 Stage 1 (25a) — wrap CBC into a native library
+
+**Goal:** Host artifact that embeds a finished `.cbc`, loads it from a DSO
+constructor, and is runnable by `launcher` when the blob has `main`.
+
+| Work | Steps | Notes |
 |---|---|---|
-| **W0** | `linkToMemory`; `-o foo.cbc` still the `24` path | parity |
-| **W1** | Engine `load_buffer` + `lookup` + incremental load | unit tests |
-| **W2** | `__cbc_lib_start`; wrap module with blob + ctor, **no** stubs; ELF `-shared` that only initializes | `dlopen` + side effect in a CBC ctor |
-| **W3** | Naked N2C stubs; N2C+C2I tests (GC, unwind, nested attach) | native C calls `foo` |
-| **W4** | Address-taken / `FNPTR64` = stub; legalizer allows stubbed callbacks | `qsort` with a CBC comparator |
-| **W5** | `--lto-emit-llvm` / `.a`; LTO DCE of unused stubs | `opt`/`lld` IR check |
-| **W6** | Mach-O `-dylib` wrap (driver hook may still be Linux-only resolution) | `dlopen` on Darwin once the engine+runtime exist |
+| Memory emit | **W0** | `linkToMemory`; `-o foo.cbc` parity with `24` |
+| Engine buffer load | **W1** | `ensure_init`, `load_buffer(name)`, `lookup`, incremental load |
+| Wrap without stubs | **W2** | Blob + ctor + `__cbc_lib_start`; ELF `-shared` |
+| Launcher ELF path | **W2b** | Magic sniff → `dlopen` → `FindMain`; keep `Entry.main` when hasMain (§4 / §4.1) |
+
+**No** naked N2C stubs, **no** ELF exports for CBC functions, **no**
+`FNPTR64` → stub rewrite, **no** stubbed `qsort` callbacks.
+
+**Exit criteria for 25a:** `clang -fcbc -shared -o libapp.so …` produces a
+DSO whose ctor loads CBC; `launcher libapp.so args…` returns `main`’s
+status when present; a pure plugin `dlopen`s and runs CBC ctors without a
+trampoline; `-o a.cbc` unchanged.
+
+Optional in 25a: emit wrap as `.bc` / thin `.a` / `-r` with **only**
+blob+ctor (no stub DCE story yet). Full LTO packaging is **25b** / **W5**.
+
+### 12.2 Stage 2 (25b) — native symbols for CBC functions
+
+**Goal:** Default-visibility / address-taken CBC functions appear as C-ABI
+ELF symbols whose bodies are the N2C stub sequence (§6–§7).
+
+| Work | Steps | Depends on |
+|---|---|---|
+| Naked N2C stubs | **W3** | **W2**; gated on `13` §8 (GC, unwind, nested attach) |
+| Address-taken / `FNPTR64` = stub; legalizer | **W4** | W3 |
+| Packaging LTO DCE | **W5** | Stubs exist so unused exports can die |
+| Mach-O `-dylib` | **W6** | Can land 25a-shaped first, then stubs; or after ELF 25b |
+
+**Exit criteria for 25b:** native C calls an exported CBC `foo`; `qsort`
+with a CBC comparator works when the comparator is stubbed; unused stubs
+DCE from a bitcode `.a`.
+
+### 12.3 Relation to `26`
+
+```
+24 ──► 25a (W0–W2b) ──► 25b (W3–W5) ──► 26b (cbc_native)
+              │
+              └──► 26a (-fcbc) may run in parallel
+```
+
+`26b` needs wrap **W2+** (somewhere to put Module N `.text`). It does not
+strictly need W3 if native code only lives in `cbc_native` functions, but
+calling CBC from native still needs 25b stubs (or a separate exported
+DSO).
+
+`__attribute__((cbc_native))` is **not** part of 25a or 25b.
+
+## 13. Implementation order
+
+Relative to §12. Steps are tagged **25a** or **25b**.
+
+| Step | Stage | Work | Exit |
+|---|---|---|---|
+| **W0** | 25a | `linkToMemory`; `-o foo.cbc` still the `24` path | parity |
+| **W1** | 25a | Engine `load_buffer` + `lookup` + incremental load; register `name` | unit tests |
+| **W2** | 25a | `__cbc_lib_start`; wrap module with blob + ctor, **no** stubs; ELF `-shared` | `dlopen` + side effect in a CBC ctor |
+| **W2b** | 25a | `launcher`: ELF sniff + `dlopen`; `FindMain` after ctor; keep `Entry.main` when hasMain | `launcher libapp.so args…` returns `main`’s status |
+| **W3** | 25b | Naked N2C stubs; N2C+C2I tests (GC, unwind, nested attach) | native C calls `foo` |
+| **W4** | 25b | Address-taken / `FNPTR64` = stub; legalizer allows stubbed callbacks | `qsort` with a CBC comparator |
+| **W5** | 25b | `--lto-emit-llvm` / `.a` / `-r`; LTO DCE of unused stubs | `opt`/`lld` IR check |
+| **W6** | 25b† | Mach-O `-dylib` wrap (driver hook may still be Linux-only resolution) | `dlopen` on Darwin once the engine+runtime exist |
+
+† W6 may ship a 25a-shaped Mach-O wrap before stubs; full parity with ELF
+25b follows.
 
 W3 is gated on `13` §8 verification. Do not ship stubs that only work on
 the launcher thread.
 
-`__attribute__((cbc_native))` and a split of the linked module into CBC vs
-native functions are **not** these steps (`26` F6, after wrap W2). The wrap
-module here is blob + ctor + N2C stubs only.
-
-## 13. Risks
+## 14. Risks
 
 | Risk | Mitigation |
 |---|---|
@@ -502,19 +650,28 @@ module here is blob + ctor + N2C stubs only.
 | Lazy `fuh` lookup races | `call_once` / atomic in the enter thunk; ctor eager-fill is a fallback |
 | `Writer` after wrap inherits CBC `elf::Ctx` state (scripts, SharedFiles) | Build a **fresh** native link request: one object, `DT_NEEDED` from `aotDeps` + engine/runtime, no CBC bitcode files |
 | Accidental ELF from a job that wanted `.cbc` | Default `-o a.cbc`; only non-`.cbc` names wrap |
-| 1024 trampolines | Never call `GetDirectCallTrampoline` for exports |
+| Double image init if `Entry.main` still runs ctors | §4 split: lib_start = init/ctors; Entry.main = argv/`main`/atexit only when wrap |
+| `FindMain` cannot see buffer-loaded image | `load_buffer` name = launcher path; set `g_mainCbc` to the same string |
+| Ctor runs before launcher `InitCJRuntime` if someone `dlopen`s without launcher | `ensure_init` starts runtime; launcher path still prefers Init first |
+| 1024 trampolines | Never call `GetDirectCallTrampoline` for exports; program entry uses existing trampoline |
 | Module asm sneaks back in for “simplicity” | Reject in review; stubs are `Function`s |
 | iOS W^X vs engine code heap | macOS first; iOS is a product decision, not this design |
 
-## 14. Summary
+## 15. Summary
 
 `--cbc` always builds a `.cbc` in memory. If `-o` ends in `.cbc`, that is
 the output (`24`). Otherwise `lld/CBC` synthesizes a host module — payload
 array, constructor that calls `cbc_engine_load_buffer`, and **naked
 functions whose bodies are the N2C stub sequence** — then either writes
-bitcode or codegens and runs the flavor `Writer`. That is not “CBC mode
-emits ELF of CBC IR”; it is native linking of a wrapper, inside the same
-process, so clang does not grow a wrap step.
+bitcode / archives or codegens and runs the flavor `Writer`. That is not
+“CBC mode emits ELF of CBC IR”; it is native linking of a wrapper, inside
+the same process, so clang does not grow a wrap step. Host **executable**
+wrap is out of scope.
+
+**Running:** `launcher a.cbc` or `launcher libapp.so` (ELF magic → `dlopen` →
+ctor loads CBC → same `FindMain` trampoline). `.bc` / `.a` / `-r` are not
+launcher inputs. No host `main`, no exported “run main” symbol. Blobs with a C `main`
+keep `mainTypeName`; pure libraries set it to −1.
 
 Function-level assembly exists so unused exports are IR DCE, which
 module-level `asm` cannot be. Native→CBC for those exports is in scope and
