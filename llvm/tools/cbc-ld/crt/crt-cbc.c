@@ -149,6 +149,9 @@ i32 __cbc_args(char ***argv_out) {
       if (len >= 4 && s[len - 4] == '.' && s[len - 3] == 'c' &&
           s[len - 2] == 'b' && s[len - 1] == 'c')
         ends = 1;
+      if (len >= 3 && s[len - 3] == '.' && s[len - 2] == 's' &&
+          s[len - 1] == 'o')
+        ends = 1;
       if (seen_cbc) {
         v[argc] = s;
         argc = argc + 1;

@@ -493,8 +493,11 @@ std::string llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> Methods,
     putU32(12 + 4 * I, AotOffs[I]);
   putU32(32, ExtAt);
   putU32(36, RegionAt);
+  bool HasMainMethod = false;
+  for (const CBCCompiledMethod &Meth : Methods)
+    HasMainMethod |= Meth.Name == "main";
   auto putS32 = [&](unsigned At, int32_t V) { putU32(At, static_cast<uint32_t>(V)); };
-  putS32(40, static_cast<int32_t>(SEntry));
+  putS32(40, HasMainMethod ? static_cast<int32_t>(SEntry) : -1);
   putS32(44, -1);
   putS32(48, SAotDeps == UINT32_MAX ? -1 : static_cast<int32_t>(SAotDeps));
   putS32(52, -1);

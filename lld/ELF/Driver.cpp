@@ -3431,8 +3431,9 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
 
   parseFiles(ctx, files);
 
-  // CBC mode: resolve inputs with ELF machinery, then emit a .cbc and skip
-  // LTO / Writer. Must not reuse skipLinkedOutput (that still runs LTO).
+  // CBC mode: resolve inputs with ELF machinery, then emit a .cbc (or wrap)
+  // and skip LTO / Writer on CBC IR. Must not reuse skipLinkedOutput (that
+  // still runs LTO).
   if (ctx.arg.cbcMode) {
     if (errCount(ctx))
       return;
@@ -3447,7 +3448,36 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
     req.aotDeps = aotDeps;
     req.outputPath = ctx.arg.outputFile;
     req.triple = triple;
-    cbc::link(req);
+
+    StringRef OutName = ctx.arg.outputFile;
+    bool WantShared = ctx.arg.shared || OutName.ends_with(".so");
+    if (OutName.ends_with(".so") && !ctx.arg.shared)
+      Warn(ctx) << "CBC: producing a shared library because output ends in "
+                   ".so; pass -shared explicitly";
+    if (WantShared && OutName.ends_with(".cbc")) {
+      Err(ctx) << "CBC: -shared with a .cbc output is not supported";
+      return;
+    }
+    bool IsContainer = OutName.empty() || OutName.ends_with(".cbc") ||
+                       (!WantShared && !OutName.ends_with(".so"));
+    // Host executable wrap is out of scope.
+    if (!IsContainer && !WantShared) {
+      Err(ctx) << "CBC: host executable wrap is not supported; use .cbc or "
+                  "-shared -o lib.so";
+      return;
+    }
+    req.wrap = !IsContainer;
+
+    if (IsContainer) {
+      cbc::link(req);
+      return;
+    }
+
+    cbc::CBCLinkResult Result;
+    if (!cbc::linkToMemory(req, Result))
+      return;
+    if (!cbc::emitSharedWrap(ctx.arg.outputFile, Result, ctx.arg.searchPaths))
+      return;
     return;
   }
 

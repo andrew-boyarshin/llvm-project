@@ -3,7 +3,9 @@
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Options/Options.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Path.h"
+#include <cstdlib>
 
 using namespace clang::driver;
 using namespace clang::driver::toolchains;
@@ -106,8 +108,23 @@ void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   ArgStringList CmdArgs;
   // --cbc must be first so ELF option parsing selects CBC mode.
   CmdArgs.push_back("--cbc");
+  if (Args.hasArg(options::OPT_shared))
+    CmdArgs.push_back("-shared");
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());
+
+  // Host dirs for deferred wrap native link (libcbcengine, libcangjie-runtime).
+  if (const char *HostDirs = ::getenv("CBC_HOST_LIBDIRS")) {
+    StringRef Rest(HostDirs);
+    while (!Rest.empty()) {
+      auto Split = Rest.split(':');
+      if (!Split.first.empty()) {
+        CmdArgs.push_back("-L");
+        CmdArgs.push_back(Args.MakeArgString(Split.first));
+      }
+      Rest = Split.second;
+    }
+  }
 
   SmallString<256> Crt(getToolChain().getDriver().Dir);
   llvm::sys::path::append(Crt, "..", "lib", "cbc", "crt-cbc.bc");

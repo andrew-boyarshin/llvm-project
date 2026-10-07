@@ -33,7 +33,8 @@ bool isRuntimeHelper(StringRef Name) {
          Name == "__cbc_sjlj_value" || Name == "__cbc_continue_unwinding" ||
          Name == "__cbc_raise" || Name == "__cbc_fcb" ||
          Name == "__cbc_check_host" ||
-         Name == "__cbc_image_init" || Name == "__cbc_image_base";
+         Name == "__cbc_image_init" || Name == "__cbc_image_base" ||
+         Name == "__cbc_lib_start";
 }
 
 Function *declare(Module &M, StringRef Name, FunctionType *Ty) {

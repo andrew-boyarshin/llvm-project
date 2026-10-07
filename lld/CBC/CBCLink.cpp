@@ -26,8 +26,8 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 #include <set>
@@ -48,7 +48,12 @@ const Target *findCBCTarget() {
 
 } // namespace
 
-bool cbc::link(const CBCLinkRequest &request) {
+bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
+  out = CBCLinkResult();
+  out.wrap = request.wrap;
+  for (StringRef D : request.aotDeps)
+    out.aotDeps.push_back(D.str());
+
   if (request.wholeModules.empty()) {
     error("no bitcode input");
     return false;
@@ -183,6 +188,8 @@ bool cbc::link(const CBCLinkRequest &request) {
 
   Composite->setTargetTriple(ExpectedTriple);
   Composite->addModuleFlag(Module::Warning, "cbc-whole-program", uint32_t(1));
+  if (request.wrap)
+    Composite->addModuleFlag(Module::Warning, "cbc-wrap", uint32_t(1));
   if (!request.aotDeps.empty()) {
     std::string Deps = request.aotDeps[0].str();
     for (size_t I = 1; I < request.aotDeps.size(); ++I) {
@@ -278,19 +285,43 @@ bool cbc::link(const CBCLinkRequest &request) {
   }
   Composite->setDataLayout(TM->createDataLayout());
 
-  std::error_code EC;
-  ToolOutputFile Out(request.outputPath, EC, sys::fs::OF_None);
-  if (EC) {
-    error(EC.message());
-    return false;
-  }
+  // Before codegen: SynthesizeEntry (in the emit pipeline) renames main→__cbc_main.
+  if (Function *Main = Composite->getFunction("main"))
+    out.hasMain = !Main->isDeclaration();
+  else if (Function *Renamed = Composite->getFunction("__cbc_main"))
+    out.hasMain = !Renamed->isDeclaration();
+
+  SmallVector<char, 0> Buf;
+  raw_svector_ostream OS(Buf);
   legacy::PassManager CodeGen;
-  if (TM->addPassesToEmitFile(CodeGen, Out.os(), nullptr,
+  if (TM->addPassesToEmitFile(CodeGen, OS, nullptr,
                               CodeGenFileType::ObjectFile)) {
     error("CBC target cannot emit an object file");
     return false;
   }
   CodeGen.run(*Composite);
-  Out.keep();
-  return errorCount() == 0;
+  if (errorCount())
+    return false;
+
+  out.bytes = std::move(Buf);
+  out.triple = ExpectedTriple;
+  return true;
+}
+
+bool cbc::link(const CBCLinkRequest &request) {
+  CBCLinkResult Result;
+  if (!linkToMemory(request, Result))
+    return false;
+  if (request.outputPath.empty()) {
+    error("CBC link requires an output path");
+    return false;
+  }
+  std::error_code EC;
+  raw_fd_ostream Out(request.outputPath, EC, sys::fs::OF_None);
+  if (EC) {
+    error(EC.message());
+    return false;
+  }
+  Out.write(Result.bytes.data(), Result.bytes.size());
+  return !Out.has_error() && errorCount() == 0;
 }

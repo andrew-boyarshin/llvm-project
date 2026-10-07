@@ -458,7 +458,7 @@ public:
     bool HasMain = false;
     for (const CBCCompiledMethod &Meth : Methods)
       HasMain |= Meth.Name == "main";
-    if (!HasMain)
+    if (!HasMain && !M.getModuleFlag("cbc-wrap"))
       report_fatal_error("CBC object emission requires a function named main");
     CBCImageInfo Image;
     std::string AotDeps;

@@ -1,10 +1,12 @@
 add_lld_library(lldCBC
   CBCLink.cpp
+  CBCWrap.cpp
 
   LINK_COMPONENTS
   ${LLVM_TARGETS_TO_BUILD}
   Analysis
   BitReader
+  CodeGen
   Core
   IPO
   IRReader

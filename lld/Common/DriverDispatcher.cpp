@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lld/Common/CommonLinkerContext.h"
+#include "lld/Common/DeferredNativeLink.h"
 #include "lld/Common/Driver.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
@@ -16,11 +17,13 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/CrashRecoveryContext.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 #include <cstdlib>
+#include <string>
 
 using namespace lld;
 using namespace llvm;
@@ -163,13 +166,42 @@ int unsafeLldMain(llvm::ArrayRef<const char *> args,
   int r = !d(argsV, stdoutOS, stderrOS, exitEarly, inTestOutputDisabled);
   // At this point 'r' is either 1 for error, and 0 for no error.
 
+  // Delete the global context and clear the global context pointer, so that it
+  // cannot be accessed anymore. Must happen before a deferred CBC wrap re-link
+  // (nested CommonLinkerContext is a no-op while the first Ctx is live).
+  CommonLinkerContext::destroy();
+
+  // CBC wrap: re-enter a fresh ELF -shared link after CBC Ctx is gone.
+  // This must run before exitEarly's exitLld, or wrap products never emit.
+  {
+    SmallVector<const char *, 32> Deferred;
+    std::string TmpObj;
+    if (takeDeferredNativeLink(Deferred, TmpObj) && !Deferred.empty()) {
+      Driver ElfDriver = nullptr;
+      for (DriverDef Def : drivers) {
+        if (Def.f == lld::Gnu) {
+          ElfDriver = Def.d;
+          break;
+        }
+      }
+      if (ElfDriver) {
+        // exitEarly=false so we can remove the temp object and return status.
+        int WrapR = !ElfDriver(Deferred, stdoutOS, stderrOS,
+                               /*exitEarly=*/false, inTestOutputDisabled);
+        if (!TmpObj.empty())
+          fs::remove(TmpObj);
+        CommonLinkerContext::destroy();
+        if (WrapR)
+          r = WrapR;
+      } else if (!TmpObj.empty()) {
+        fs::remove(TmpObj);
+      }
+    }
+  }
+
   // Call exit() if we can to avoid calling destructors.
   if (exitEarly)
     exitLld(r);
-
-  // Delete the global context and clear the global context pointer, so that it
-  // cannot be accessed anymore.
-  CommonLinkerContext::destroy();
 
   return r;
 }
