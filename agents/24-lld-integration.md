@@ -1,14 +1,21 @@
 # 24 — Integrate `cbc-ld` into lld
 
 Authoritative over `10-linker-and-runtime.md` §2.1 (where the link step lives)
-and over `09-clang.md` §4.2 (how clang invokes it). Does not change the
+and over `09-clang.md` §4.2 (the short linker argv). Does not change the
 whole-program compilation model (`04-architecture.md` §3), the `.cbc` format
 (`03-cbc-file-format.md`), or the postponed phase-2 relocatable design
 (`10` §4).
 
-Mach-O / iOS (`cbc_aarch64-apple-darwin`) is **out of scope for this work**
-(`04` §2 still lists it as not planned). The split below exists so that work
-does not have to be undone when a Darwin driver is added.
+`26-cbc-as-native-flavor.md` is the user-facing target: host triple plus
+`-fcbc`. This work is the first step toward that — `ld.lld --cbc` writes a
+`.cbc`. It does **not** wrap (`25`), does **not** implement
+`__attribute__((cbc_native))` (`26`), and does not replace `CBCTargetInfo`.
+lld copies the module triple from bitcode and must not assume
+`ArchType::cbc`.
+
+Mach-O / iOS is **out of scope for this work** (`04` §2 still lists it as
+not planned). The split below exists so that work does not have to be undone
+when a Darwin driver is added.
 
 ## 0. Goal
 
@@ -96,9 +103,9 @@ bool lld::cbc::link(const CBCLinkRequest &);
 not this document’s). Errors go through `lld`’s Common `ErrorHandler`, which
 both flavors already own.
 
-Do **not** bake `cbc_x86_64-unknown-linux-gnu` into `lld::cbc::link`. Today’s
-Linux inputs already carry that triple; the request copies it. An iOS
-bitcode module would carry `cbc_aarch64-apple-darwin`.
+Do **not** bake a triple into `lld::cbc::link`. The request copies it from
+the first bitcode module (`26`: `x86_64-unknown-linux-gnu` from `-fcbc`;
+an iOS module would carry `arm64-apple-darwin`).
 
 Launcher-library omission (`c`, `m`, … vs Darwin `System`) is **driver**
 policy. The ELF driver filters `SharedFile`s before filling `aotDeps`.
@@ -215,7 +222,7 @@ designed here.
 | New `lld` flavor / `Flavor::CBC` | Would not get `LinkerScript`; emit is a library, not a driver |
 | Mach-O / iOS `--cbc`, Darwin clang toolchain, TBD/dylib resolution | Out of scope; the `CBCLinkRequest` boundary is the accommodation |
 | Putting emit in `lld/Common` | Would link the CBC target into COFF and wasm |
-| ELF `Writer`, program headers, GOT, PLT, copy relocs, ICF, thunks | Output is `.cbc` |
+| ELF `Writer`, program headers, GOT, PLT, copy relocs, ICF, thunks | This work’s output is `.cbc`; `25` may run `Writer` on a wrap object later |
 | Honouring `SECTIONS` / `MEMORY` / `PHDRS` / `INSERT` | Not required for DSO-script resolution; CBC has one data image built in IR (`CBCLowerGlobals`) |
 | Phase-2 relocatable `EM_CBC` objects (`10` §4, D1) | Postponed indefinitely |
 | Switching the emit path to `llvm::lto::LTO` | Behavior change vs today’s `llvm::Linker` + O2; a later commit, not a prerequisite |
@@ -224,6 +231,7 @@ designed here.
 | Engine `.so.N` version guessing | Removed; write SONAMEs instead (§8) |
 | Inheriting clang’s GNU `ConstructJob` (crt1.o, `-dynamic-linker`, `-z relro`) | Those are ELF-output flags; CBC’s driver stays a short explicit list |
 | Keeping a `cbc-ld` wrapper / symlink | Clang calls `ld.lld --cbc`; the tool is deleted |
+| Wrap product, N2C stubs, `__attribute__((cbc_native))` | `25` / `26`. This work always writes a container |
 
 ## 5. Parity checklist (today’s `cbc-ld`)
 
@@ -238,7 +246,7 @@ only allowed where this list is silent (DSO scripts, `-l` finding `.so`).
 | P4 | `-lfoo` that is not a bitcode `libfoo.a` becomes a needed native `SharedFile`; launcher set `c m pthread dl rt gcc gcc_s resolv` omitted from `aotDeps` (matched by stem of SONAME) | today: bare stem; after: SONAME |
 | P5 | Native libs become module metadata `cbc.aotDeps` (`:`-separated **SONAMEs**); `CBCAsmPrinter` writes the header string | `CBCAsmPrinter.cpp`; engine accepts SONAME or stem |
 | P6 | Leftover used `_Z*` declarations are a hard error (“native C++ not supported”) | after IR link, **before** O2 (same order as today, including the known hole F-23) |
-| P7 | Module triple taken from the bitcode (today: `cbc_x86_64-unknown-linux-gnu`); flag `cbc-whole-program` = 1 | do not hardcode the Linux triple in `lld::cbc::link` |
+| P7 | Module triple taken from the bitcode; flag `cbc-whole-program` = 1 | do not hardcode a triple in `lld::cbc::link`; do not require `ArchType::cbc` |
 | P8 | `nounwind` stripped from `__cbc_raise`, `__cbc_nullcheck`, `_Unwind_RaiseException`, `_Unwind_Resume`, `_Unwind_Resume_or_Rethrow` and their call sites | |
 | P9 | `PassBuilder` per-module default pipeline at **O2**, then `TargetMachine` `ObjectFile` codegen | |
 | P10 | After O2: hardcoded unsupported libc names (`qsort`, `pthread_create`, …) | |
@@ -256,7 +264,7 @@ as part of the move.
 ## 6. Architecture (Linux, this work)
 
 ```
-clang --target=cbc_x86_64-unknown-linux-gnu
+clang --target=x86_64-unknown-linux-gnu -fcbc
         │
         ▼
 ld.lld --cbc -o a.cbc --crt crt-cbc.bc -L <cbc-lib> -L <host-lib> …
@@ -291,7 +299,7 @@ lld::cbc::link(request)           // lld/CBC
 
 | Option | Meaning |
 |---|---|
-| `--cbc` | CBC mode: resolve inputs as ELF lld, emit `.cbc`, do not write ELF |
+| `--cbc` | CBC mode: resolve inputs as ELF lld, emit `.cbc`, do not write ELF. (`25` may wrap after emit when `-o` is not `.cbc`; this work always writes the container.) |
 | `--crt <file>` | Bitcode runtime, linked whole (same as today’s flag) |
 | `-o`, `-L`, `-l`, `--start-group`/`--end-group`, `-(` / `-)`, `--whole-archive`, `--no-whole-archive`, `--as-needed`, `--no-as-needed`, `-Bstatic` / `-Bdynamic`, `--sysroot`, `-l:filename` | already in ELF `Options.td`; used as-is |
 | `--no-native-validation` | accepted, ignored (P12) |
@@ -342,11 +350,11 @@ branches.
 | `elf_relocatable` | `ObjFile` | **error if the user named it**; **skip if a script/`-l` brought it in** (§7.1) |
 | `formatBinary` | `BinaryFile` | error |
 
-Mixing CBC host flavours: if a bitcode module’s triple is not the same CBC
-sub-arch as the rest of the link, error. Same rule `10` §2.2 step 1
-intended. Do not special-case “must be Linux x86-64” in the ELF driver
+Mixing host flavours: if a bitcode module’s triple is not the same as the
+rest of the link, error. Same rule `10` §2.2 step 1 intended. Do not
+special-case “must be Linux x86-64” or `ArchType::cbc` in the ELF driver
 beyond “all bitcode triples must agree”; the in-scope triple is whatever
-clang emitted.
+clang emitted (`26`: the host triple).
 
 `-Bstatic` / `-static` must **not** disable `.so` search in CBC mode.
 Native libraries are always DSOs (or scripts pointing at DSOs). If
@@ -554,8 +562,15 @@ heuristic, O2-before-check order) in this move.
 Set `cbc.aotDeps` from `request.aotDeps`. Set `cbc-whole-program`. Use
 `request.triple` (P7).
 
-Codegen: same `TargetRegistry::lookupTarget`, `Reloc::Static`,
+Codegen: **construct `CBCTargetMachine` for the CBC backend**, with
+`request.triple` as the module/host triple. `Reloc::Static`,
 `CodeModel::Small`, `addPassesToEmitFile(..., ObjectFile)`.
+
+Do **not** `TargetRegistry::lookupTarget(request.triple)`. Once clang
+emits host triples (`26`), that lookup is X86/AArch64 and would native-
+codegen CBC IR. Look up the registered CBC target by name, or call the
+CBC TM constructor. This is the only emit-side concession to `26`; it
+does not implement `-fcbc` or a module flag.
 
 ### 10.3 Where the ELF driver calls it
 
@@ -592,6 +607,17 @@ Set in `readConfigs` from `OPT_cbc` / `OPT_crt`. `--cbc` implies
 
 ## 11. Clang driver
 
+Documented compile/link (`26`):
+
+```
+clang --target=x86_64-unknown-linux-gnu -fcbc -o a.cbc …
+```
+
+which runs `ld.lld --cbc …`. This work does **not** add `-fcbc`, delete
+`Triple::cbc`, or overlay `TargetInfo`. Selecting the linker job (today:
+`CBCToolChain`; `26`: host toolchain + `-fcbc`) can stay as `09` until
+that milestone. The argv below is what lld sees either way.
+
 `clang/lib/Driver/ToolChains/CBC.cpp` `cbc::Linker::ConstructJob` stays a
 **short explicit argv**. It does not call `gnutools::Linker::ConstructJob`
 (that injects `crt1.o`, `crti.o`, `-dynamic-linker`, `-z relro`, `-lc`,
@@ -622,9 +648,9 @@ parsing; that is acceptable (CBC never passed them). If a later clang
 change starts injecting GNU flags, drop them in `ConstructJob`, do not
 teach CBC mode to honour them.
 
-A Darwin CBC toolchain, when it exists, is a **different** `ToolChain`
+A Darwin linker job, when it exists, is a **different** `ToolChain`
 (syslibroot, `ld64.lld --cbc`, no GNU `AddFilePathLibArgs`). Do not grow
-the Linux `ConstructJob` to cover it.
+the Linux `ConstructJob` to cover it. How Darwin selects that job is `26`.
 
 ## 12. Delete `cbc-ld`
 
@@ -709,8 +735,17 @@ Call it **~2 weeks**, not the 5–9 engineer-weeks of a wasm-style flavor.
 
 ## 16. Follow-ups (not this design)
 
-* Mach-O `--cbc`: `ld64.lld` mode, TBD/dylib/re-exports, Darwin
-  `CBCToolChain`, `LINK_LIBS lldCBC`. Same `CBCLinkRequest`.
+* Native ELF/Mach-O libraries with the `.cbc` embedded, `@C`-style N2C
+  stubs, and in-process wrap when `-o` is not `.cbc`:
+  `25-cbc-native-libraries.md`. That document is authoritative over this
+  file’s “CBC mode never runs `Writer`” for the wrap product only.
+* Host triple + `-fcbc`, `long double` policy, `__attribute__((cbc_native))`:
+  `26-cbc-as-native-flavor.md`. **Out of this work.** The only `26`
+  constraint here is §10.2 (do not look up the TargetMachine from the
+  module triple).
+* Mach-O `--cbc`: `ld64.lld` mode, TBD/dylib/re-exports, Darwin driver
+  hook, `LINK_LIBS lldCBC`. Same `CBCLinkRequest`. The wrap in `25` needs
+  this for Darwin inputs; the wrap IR itself is flavor-neutral.
 * Replace `llvm::Linker` + fixed O2 with `lto::LTO` (`10` §2.2 steps 3–5):
   internalization except entry, `getRuntimeLibcallSymbols`. Behavior
   change; gate it on tests, not on the move.

@@ -38,11 +38,12 @@ scope**, and CBC function pointers are deliberately not executable (`13-engine-c
 
 | Item | Status |
 |---|---|
-| `cbc_x86_64-unknown-linux-gnu` | **in scope**: implemented, tested, shipped |
+| `x86_64-unknown-linux-gnu` + `-fcbc` | **in scope** (`26`); replaces the former `cbc_x86_64-…` architecture triple, which is not kept as an alias |
 | `cbc_aarch64-unknown-linux-gnu` | **follow-up**: fully designed in these documents (register mapping, ABI, `va_list`, data layout), not in the current work scope (`04-architecture.md` §2) |
 | whole-program compilation (bitcode objects, code generation in `cbc-ld` / `ld.lld --cbc`) | **in scope**: the only build model; linker home is `24-lld-integration.md` |
 | separate code generation ("phase 2": relocatable CBC objects, per-object data images) | **postponed indefinitely**: kept as a design sketch (`10-linker-and-runtime.md` §4, `04-architecture.md` §6.5), not implemented |
-| Apple / OpenHarmony triples, native→CBC callbacks, threads | not planned |
+| Apple / OpenHarmony triples, threads | not planned |
+| native→CBC for **exported / address-taken** functions (N2C stubs, ELF/Mach-O wrap) | **designed** in `25-cbc-native-libraries.md`; not in the current `24` work |
 
 ## Reading order
 
@@ -71,7 +72,9 @@ scope**, and CBC function pointers are deliberately not executable (`13-engine-c
 | 20  | `[20-setjmp-isel.md](20-setjmp-isel.md)`                 | `CBCLowerSjLj` builds a CFG that dies in live-variable analysis. `setjmp`/`longjmp` do not compile. |
 | 21  | `[21-native-aggregate-abi.md](21-native-aggregate-abi.md)` | Clang still uses the default ABI, so native struct returns such as `div_t` are passed as hidden pointers. Host glibc returns them in `rax`. |
 | 22  | `[22-method-resolution.md](22-method-resolution.md)`     | Some libc++ calls compile as `call.direct` and then the engine cannot find the method: `std::map` emplace and `std::runtime_error`. A class throw also misses a GC liveness position. |
-| 24  | `[24-lld-integration.md](24-lld-integration.md)`         | Delete `cbc-ld`. Linux: ELF `ld.lld --cbc` resolves GNU `INPUT()`/`GROUP()` scripts; emit lives in a flavor-neutral `lld/CBC` library so Mach-O can hook later (out of scope). Authoritative over `10` §2.1 and `09` §4.2 for where the linker lives. |
+| 24  | `[24-lld-integration.md](24-lld-integration.md)`         | Delete `cbc-ld`. Linux: ELF `ld.lld --cbc` writes a `.cbc`. No wrap, no `cbc_native`. Constructs `CBCTargetMachine` by CBC name (not `lookupTarget(triple)`). Authoritative over `10` §2.1 and `09` §4.2 for where the linker lives. |
+| 25  | `[25-cbc-native-libraries.md](25-cbc-native-libraries.md)` | After `24`: `--cbc` still builds a `.cbc` in memory; non-`.cbc` `-o` wraps it in a host ELF/Mach-O/bitcode module (blob + ctor + naked N2C stubs). No separate wrap tool. No `cbc_native`. Native→CBC for exports is in scope. |
+| 26  | `[26-cbc-as-native-flavor.md](26-cbc-as-native-flavor.md)` | Extends `24`/`25`: host triple + `-fcbc` for real (drop `cbc_*` TargetInfo); prohibit mismatched `long double`; then `__attribute__((cbc_native))`. Does **not** delete `llvm/lib/Target/CBC`. |
 
 
 
@@ -82,9 +85,10 @@ scope**, and CBC function pointers are deliberately not executable (`13-engine-c
   of the host C calling convention (on x86-64 `IR1..IR6` are `rdi..r9`, `FR0..FR7` are
    `xmm0..xmm7`; on AArch64 `IR1..IR9` are `x0..x8`). Native calls are made by copying
    those registers into machine registers. A `.cbc` file is therefore host-ABI specific.
-   Triples: `cbc_x86_64-unknown-linux-gnu` (current work scope) and
-   `cbc_aarch64-unknown-linux-gnu` (designed, follow-up) — `Triple::cbc` plus a
-   sub-architecture. Clang reuses the host's ABI lowering.
+   **User-facing** compilation is the host triple plus `-fcbc`
+   (`26-cbc-as-native-flavor.md`). There is no `cbc_*` triple alias. The bytecode
+   backend remains `llvm/lib/Target/CBC`. Clang uses the host `TargetInfo` (not a
+   parallel CBC architecture) so ABI lowering is the host's.
 2. **C pointers are plain 64-bit integers; all memory access is raw.** The backend uses
   `LoadRawMemory`/`StoreRawMemory` (base register plus non-negative displacement) and
    never the typed field/object instructions, so no GC references exist and every
