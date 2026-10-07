@@ -54,7 +54,7 @@ bool linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out);
 bool link(const CBCLinkRequest &request);
 
 /// Build host wrap module (blob + ctor), codegen, deferred native -shared link.
-/// \p hostSearchPaths are -L dirs from the CBC link (incl. CBC_HOST_LIBDIRS).
+/// \p hostSearchPaths are -L dirs from the CBC link.
 bool emitSharedWrap(llvm::StringRef outputPath, const CBCLinkResult &result,
                     llvm::ArrayRef<llvm::StringRef> hostSearchPaths = {});
 

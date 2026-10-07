@@ -31,9 +31,7 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
-#include <cstdlib>
 #include <string>
-#include <vector>
 
 using namespace llvm;
 using namespace lld;
@@ -187,26 +185,12 @@ bool emitSharedWrap(StringRef outputPath, const CBCLinkResult &result,
   push("-o");
   push(outputPath);
   push(TmpPath);
-  // Prefer -L forwarded from the CBC link (Clang CBC_HOST_LIBDIRS + user -L).
+  // -L from the CBC link (user -L and toolchain FilePaths).
   for (StringRef Dir : hostSearchPaths) {
     if (Dir.empty())
       continue;
     push("-L");
     push(Dir);
-  }
-  // Fallback when the driver did not forward host dirs.
-  if (hostSearchPaths.empty()) {
-    if (const char *Dirs = ::getenv("CBC_HOST_LIBDIRS")) {
-      StringRef Rest(Dirs);
-      while (!Rest.empty()) {
-        auto Split = Rest.split(':');
-        if (!Split.first.empty()) {
-          push("-L");
-          push(Split.first);
-        }
-        Rest = Split.second;
-      }
-    }
   }
   push("-lcbcengine");
   push("-l:libcangjie-runtime.so");
