@@ -141,15 +141,17 @@ def SELECT_FPR_I : CBCInst<(outs FPR:$d),
   let usesCustomInserter = 1;
 }
 
+// Both return regs are Uses so two-register aggregates keep IR2/FR1 live.
+// LowerReturn zero-fills any unused member of the pair.
 def RET : CBCInst<(outs), (ins), "ret.W64 ir1"> {
   let isTerminator = 1;
   let isReturn = 1;
   let isBarrier = 1;
-  let Uses = [IR1];
+  let Uses = [IR1, IR2];
 }
 def FRET : CBCInst<(outs), (ins), "fret.W64 fr0"> {
   let isTerminator = 1;
   let isReturn = 1;
   let isBarrier = 1;
-  let Uses = [FR0];
+  let Uses = [FR0, FR1];
 }

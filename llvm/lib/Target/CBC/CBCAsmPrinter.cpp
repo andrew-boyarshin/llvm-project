@@ -448,7 +448,10 @@ public:
     for (const Argument &Arg : Fn.args())
       M.Params.push_back(Arg.getType()->isFloatingPointTy() ? 'f' : 'i');
     M.RetFloat = Fn.getReturnType()->isFloatingPointTy();
-    M.DefaultVis = Fn.getVisibility() == GlobalValue::DefaultVisibility;
+    // Default-visibility *external* defs are N2C-stub candidates; local
+    // linkage still uses VisibilityTypes::DefaultVisibility in LLVM IR.
+    M.DefaultVis = !Fn.hasLocalLinkage() &&
+                   Fn.getVisibility() == GlobalValue::DefaultVisibility;
     M.AddressTaken = Fn.hasAddressTaken();
     M.VarArg = Fn.isVarArg();
     M.StatePoints = std::move(StatePoints);

@@ -355,10 +355,11 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
       CBCTakeExportsFromTargetMachine(*TM);
   out.exports.clear();
   for (const llvm::CBCExport &E : CodegenExports) {
-    // N2C stubs hardcode cpStackSize=0, so the export's own Params must fit
-    // the host register file. MaxCalleeStackArgs is outgoing call stack slots
-    // (callee arity), not this prototype — do not gate on it.
-    if (E.VarArg) {
+    // N2C stubs (wrap only) hardcode cpStackSize=0, so stubbed exports' Params
+    // must fit the host register file. Container .cbc emit has no N2C stubs.
+    // MaxCalleeStackArgs is outgoing call stack slots, not this prototype.
+    bool NeedsN2CStub = request.wrap && (E.DefaultVis || E.AddressTaken);
+    if (NeedsN2CStub && E.VarArg) {
       error("CBC native shared library: varargs export '" + E.Name +
             "' is not supported");
       return false;
@@ -371,7 +372,7 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
         ++Ints;
     }
     // SysV: 6 int + 8 SSE; AAPCS: 8 int + 8 SIMD. Use the looser int limit.
-    if (Ints > 8 || Floats > 8) {
+    if (NeedsN2CStub && (Ints > 8 || Floats > 8)) {
       error("CBC native shared library: export '" + E.Name +
             "' does not fit the host register file");
       return false;

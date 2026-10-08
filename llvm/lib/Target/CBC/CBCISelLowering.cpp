@@ -120,20 +120,56 @@ SDValue CBCTargetLowering::LowerReturn(
                  *DAG.getContext());
   CCInfo.AnalyzeReturn(Outs, RetCC_CBC);
   SDValue Glue;
+  bool HasIR1 = false, HasIR2 = false, HasFR0 = false, HasFR1 = false;
   if (RVLocs.empty()) {
     Chain = DAG.getCopyToReg(Chain, DL, CBC::IR1,
                              DAG.getConstant(0, DL, MVT::i64), Glue);
     Glue = Chain.getValue(1);
+    HasIR1 = true;
   }
   for (unsigned i = 0; i != RVLocs.size(); ++i) {
     CCValAssign &VA = RVLocs[i];
     Chain = DAG.getCopyToReg(Chain, DL, VA.getLocReg(), OutVals[i], Glue);
     Glue = Chain.getValue(1);
+    Register R = VA.getLocReg();
+    if (R == CBC::IR1)
+      HasIR1 = true;
+    else if (R == CBC::IR2)
+      HasIR2 = true;
+    else if (R == CBC::FR0)
+      HasFR0 = true;
+    else if (R == CBC::FR1)
+      HasFR1 = true;
+  }
+  bool FloatRet = !RVLocs.empty() && RVLocs[0].getLocReg() == CBC::FR0;
+  // RET/FRET Use both result regs; define any unused half so copies into the
+  // second register are not DCE'd for two-register aggregates.
+  if (FloatRet) {
+    if (!HasFR0) {
+      Chain = DAG.getCopyToReg(Chain, DL, CBC::FR0,
+                               DAG.getConstantFP(0.0, DL, MVT::f64), Glue);
+      Glue = Chain.getValue(1);
+    }
+    if (!HasFR1) {
+      Chain = DAG.getCopyToReg(Chain, DL, CBC::FR1,
+                               DAG.getConstantFP(0.0, DL, MVT::f64), Glue);
+      Glue = Chain.getValue(1);
+    }
+  } else {
+    if (!HasIR1) {
+      Chain = DAG.getCopyToReg(Chain, DL, CBC::IR1,
+                               DAG.getConstant(0, DL, MVT::i64), Glue);
+      Glue = Chain.getValue(1);
+    }
+    if (!HasIR2) {
+      Chain = DAG.getCopyToReg(Chain, DL, CBC::IR2,
+                               DAG.getConstant(0, DL, MVT::i64), Glue);
+      Glue = Chain.getValue(1);
+    }
   }
   SmallVector<SDValue, 2> RetOps(1, Chain);
   if (Glue.getNode())
     RetOps.push_back(Glue);
-  bool FloatRet = !RVLocs.empty() && RVLocs[0].getLocReg() == CBC::FR0;
   unsigned Opc = FloatRet ? CBC::FRET : CBC::RET;
   return SDValue(DAG.getMachineNode(Opc, DL, MVT::Other, RetOps), 0);
 }
