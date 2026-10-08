@@ -9,102 +9,9 @@
 #include <optional>
 
 using namespace clang::driver;
-using namespace clang::driver::toolchains;
 using namespace clang::driver::tools;
 using namespace clang;
 using namespace llvm::opt;
-using tools::addPathIfExists;
-
-CBCToolChain::CBCToolChain(const Driver &D, const llvm::Triple &Triple,
-                           const ArgList &Args)
-    : Linux(D, Triple, Args) {
-  // Linux::Linux fills FilePaths during the base ctor, before this object
-  // exists, so our getMultiarchTriple override is not used for -L. Add the
-  // host multiarch lib dirs so -lncurses finds libncurses.so (often a linker
-  // script under /usr/lib/x86_64-linux-gnu).
-  std::string SysRoot = computeSysRoot();
-  std::string MT = getMultiarchTriple(D, Triple, SysRoot);
-  path_list &Paths = getFilePaths();
-  addPathIfExists(D, concat(SysRoot, "/lib", MT), Paths);
-  addPathIfExists(D, concat(SysRoot, "/usr/lib", MT), Paths);
-}
-
-std::string CBCToolChain::getMultiarchTriple(const Driver &D,
-                                             const llvm::Triple &TargetTriple,
-                                             StringRef SysRoot) const {
-  // Host glibc headers live in the host multiarch directory
-  // (/usr/include/x86_64-linux-gnu/bits/...), not under the CBC triple.
-  if (TargetTriple.isCBCHostX86_64())
-    return "x86_64-linux-gnu";
-  if (TargetTriple.isCBCHostAArch64())
-    return "aarch64-linux-gnu";
-  return Linux::getMultiarchTriple(D, TargetTriple, SysRoot);
-}
-
-LTOKind CBCToolChain::getLTOMode(const ArgList &Args,
-                                 Action::OffloadKind Kind) const {
-  if (Args.hasArg(options::OPT_fno_lto)) {
-    getDriver().Diag(diag::err_drv_unsupported_opt)
-        << "-fno-lto (separate CBC code generation is not supported)";
-    return LTOK_Full;
-  }
-  if (!Args.hasArg(options::OPT_flto_EQ, options::OPT_fno_lto))
-    return LTOK_Full;
-  return Linux::getLTOMode(Args, Kind);
-}
-
-void CBCToolChain::addClangTargetOptions(const ArgList &DriverArgs,
-                                         ArgStringList &CC1Args, BoundArch,
-                                         Action::OffloadKind) const {
-  if (getTriple().isCBCHostAArch64() && DriverArgs.hasArg(options::OPT_c) &&
-      !DriverArgs.hasArg(options::OPT_E) &&
-      !DriverArgs.hasArg(options::OPT_fsyntax_only)) {
-    getDriver().Diag(diag::err_drv_unsupported_opt)
-        << "compilation for the AArch64 flavour of CBC";
-  }
-  CC1Args.push_back("-femulated-tls");
-  CC1Args.push_back("-fno-jump-tables");
-  CC1Args.push_back("-fno-common");
-  // Native shared libraries: dynsym APIs are opt-in (visibility("default")).
-  if (DriverArgs.hasArg(options::OPT_shared) &&
-      !DriverArgs.hasArg(options::OPT_fvisibility_EQ))
-    CC1Args.push_back("-fvisibility=hidden");
-}
-
-void CBCToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
-                                             ArgStringList &CC1Args) const {
-  if (!DriverArgs.hasArg(options::OPT_nostdinc) &&
-      !DriverArgs.hasArg(options::OPT_nobuiltininc)) {
-    SmallString<256> Inc(getDriver().Dir);
-    llvm::sys::path::append(Inc, "..", "lib", "cbc", "include");
-    addSystemInclude(DriverArgs, CC1Args, Inc);
-  }
-  Linux::AddClangSystemIncludeArgs(DriverArgs, CC1Args);
-}
-
-ToolChain::CXXStdlibType
-CBCToolChain::GetCXXStdlibType(const ArgList &Args) const {
-  if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
-    StringRef Name = A->getValue();
-    if (Name != "libc++") {
-      getDriver().Diag(diag::err_drv_invalid_stdlib_name)
-          << A->getAsString(Args);
-    }
-  }
-  return ToolChain::CST_Libcxx;
-}
-
-void CBCToolChain::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
-                                                ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdinc, options::OPT_nostdincxx))
-    return;
-  GetCXXStdlibType(DriverArgs);
-  SmallString<256> Inc(getDriver().Dir);
-  llvm::sys::path::append(Inc, "..", "lib", "cbc", "include");
-  llvm::sys::path::append(Inc, "c++", "v1");
-  CC1Args.push_back("-internal-isystem");
-  CC1Args.push_back(DriverArgs.MakeArgString(Inc));
-}
 
 void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
                                const InputInfo &Output,
@@ -146,9 +53,10 @@ void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-L");
     CmdArgs.push_back(Args.MakeArgString(ToolsLib));
     const char *RuntimeSubdir = nullptr;
-    if (getToolChain().getTriple().isCBCHostX86_64())
+    const llvm::Triple &TT = getToolChain().getTriple();
+    if (TT.getArch() == llvm::Triple::x86_64 || TT.isCBCHostX86_64())
       RuntimeSubdir = "linux_x86_64_cjnative";
-    else if (getToolChain().getTriple().isCBCHostAArch64())
+    else if (TT.getArch() == llvm::Triple::aarch64 || TT.isCBCHostAArch64())
       RuntimeSubdir = "linux_aarch64_cjnative";
     if (RuntimeSubdir) {
       SmallString<256> RuntimeLib(*CjHome);

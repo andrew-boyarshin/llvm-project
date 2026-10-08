@@ -33,7 +33,9 @@ _LIBCPP_HIDE_FROM_ABI double exp(double __x) _NOEXCEPT {
   return __builtin_exp(__x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double exp(long double __x) _NOEXCEPT { return __builtin_expl(__x); }
+#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double exp(_A1 __x) _NOEXCEPT {
@@ -49,9 +51,11 @@ _LIBCPP_HIDE_FROM_ABI double frexp(double __x, int* __e) _NOEXCEPT {
   return __builtin_frexp(__x, __e);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double frexp(long double __x, int* __e) _NOEXCEPT {
   return __builtin_frexpl(__x, __e);
 }
+#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double frexp(_A1 __x, int* __e) _NOEXCEPT {
@@ -67,9 +71,11 @@ _LIBCPP_HIDE_FROM_ABI double ldexp(double __x, int __e) _NOEXCEPT {
   return __builtin_ldexp(__x, __e);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double ldexp(long double __x, int __e) _NOEXCEPT {
   return __builtin_ldexpl(__x, __e);
 }
+#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double ldexp(_A1 __x, int __e) _NOEXCEPT {
@@ -85,7 +91,9 @@ _LIBCPP_HIDE_FROM_ABI double exp2(double __x) _NOEXCEPT {
   return __builtin_exp2(__x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double exp2(long double __x) _NOEXCEPT { return __builtin_exp2l(__x); }
+#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double exp2(_A1 __x) _NOEXCEPT {
@@ -101,7 +109,9 @@ _LIBCPP_HIDE_FROM_ABI double expm1(double __x) _NOEXCEPT {
   return __builtin_expm1(__x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double expm1(long double __x) _NOEXCEPT { return __builtin_expm1l(__x); }
+#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double expm1(_A1 __x) _NOEXCEPT {
@@ -117,9 +127,11 @@ _LIBCPP_HIDE_FROM_ABI double scalbln(double __x, long __y) _NOEXCEPT {
   return __builtin_scalbln(__x, __y);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double scalbln(long double __x, long __y) _NOEXCEPT {
   return __builtin_scalblnl(__x, __y);
 }
+#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double scalbln(_A1 __x, long __y) _NOEXCEPT {
@@ -135,9 +147,11 @@ _LIBCPP_HIDE_FROM_ABI double scalbn(double __x, int __y) _NOEXCEPT {
   return __builtin_scalbn(__x, __y);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double scalbn(long double __x, int __y) _NOEXCEPT {
   return __builtin_scalbnl(__x, __y);
 }
+#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double scalbn(_A1 __x, int __y) _NOEXCEPT {
@@ -153,9 +167,11 @@ _LIBCPP_HIDE_FROM_ABI double pow(double __x, double __y) _NOEXCEPT {
   return __builtin_pow(__x, __y);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double pow(long double __x, long double __y) _NOEXCEPT {
   return __builtin_powl(__x, __y);
 }
+#endif
 
 template <class _A1, class _A2, __enable_if_t<is_arithmetic<_A1>::value && is_arithmetic<_A2>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI __promote_t<_A1, _A2> pow(_A1 __x, _A2 __y) _NOEXCEPT {

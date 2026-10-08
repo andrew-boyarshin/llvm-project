@@ -49,7 +49,6 @@
 #include "ToolChains/Solaris.h"
 #include "ToolChains/TCE.h"
 #include "ToolChains/UEFI.h"
-#include "ToolChains/CBC.h"
 #include "ToolChains/VEToolchain.h"
 #include "ToolChains/WebAssembly.h"
 #include "ToolChains/XCore.h"
@@ -207,7 +206,7 @@ Driver::Driver(StringRef DriverExecutable, StringRef TargetTriple,
       ModulesModeCXX20(false), DriverExecutable(DriverExecutable),
       SysRoot(DEFAULT_SYSROOT), DriverTitle(Title), CCCPrintBindings(false),
       CCPrintOptions(false), CCLogDiagnostics(false), CCGenDiagnostics(false),
-      CCPrintProcessStats(false), CCPrintInternalStats(false),
+      CCPrintProcessStats(false), CCPrintInternalStats(false), CBCMode(false),
       TargetTriple(TargetTriple), Saver(Alloc), PrependArg(nullptr),
       PreferredLinker(CLANG_DEFAULT_LINKER), CheckInputsExist(true),
       ProbePrecompiled(true), SuppressMissingInputWarning(false) {
@@ -1598,6 +1597,7 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
   // or -b.
   CCCPrintPhases = Args.hasArg(options::OPT_ccc_print_phases);
   CCCPrintBindings = Args.hasArg(options::OPT_ccc_print_bindings);
+  CBCMode = Args.hasFlag(options::OPT_fcbc, options::OPT_fno_cbc, false);
   if (const Arg *A = Args.getLastArg(options::OPT_ccc_gcc_name))
     CCCGenericGCCName = A->getValue();
 
@@ -5440,7 +5440,7 @@ InputInfoList Driver::BuildJobsForActionNoCache(
 
 const char *Driver::getDefaultImageName() const {
   llvm::Triple Target(llvm::Triple::normalize(TargetTriple));
-  if (Target.getArch() == llvm::Triple::cbc)
+  if (CBCMode)
     return "a.cbc";
   return Target.isOSWindows() ? "a.exe" : "a.out";
 }
@@ -6150,6 +6150,9 @@ const ToolChain &Driver::getOffloadToolChain(
 
 const ToolChain &Driver::getToolChain(const ArgList &Args,
                                       const llvm::Triple &Target) const {
+  // CBC is no longer a clang architecture; require host triple + -fcbc.
+  if (Target.getArch() == llvm::Triple::cbc)
+    Diag(diag::err_drv_cbc_not_an_arch);
 
   auto &TC = ToolChains[Target.str()];
   if (!TC) {
@@ -6199,8 +6202,6 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
                                                               Args);
       else if (Target.getArch() == llvm::Triple::ve)
         TC = std::make_unique<toolchains::VEToolChain>(*this, Target, Args);
-      else if (Target.getArch() == llvm::Triple::cbc)
-        TC = std::make_unique<toolchains::CBCToolChain>(*this, Target, Args);
       else if (Target.isOHOSFamily())
         TC = std::make_unique<toolchains::OHOS>(*this, Target, Args);
       else if (Target.isWALI())

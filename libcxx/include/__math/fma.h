@@ -32,9 +32,11 @@ _LIBCPP_HIDE_FROM_ABI double fma(double __x, double __y, double __z) _NOEXCEPT {
   return __builtin_fma(__x, __y, __z);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double fma(long double __x, long double __y, long double __z) _NOEXCEPT {
   return __builtin_fmal(__x, __y, __z);
 }
+#endif
 
 template <class _A1,
           class _A2,

@@ -273,6 +273,8 @@ StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
                                  Expr *asmString, MultiExprArg clobbers,
                                  unsigned NumLabels,
                                  SourceLocation RParenLoc) {
+  DiagnoseCBCInlineAsm(AsmLoc);
+
   unsigned NumClobbers = clobbers.size();
 
   SmallVector<TargetInfo::ConstraintInfo, 4> OutputConstraintInfos;
@@ -1000,6 +1002,8 @@ StmtResult Sema::ActOnMSAsmStmt(SourceLocation AsmLoc, SourceLocation LBraceLoc,
                                 ArrayRef<StringRef> Clobbers,
                                 ArrayRef<Expr*> Exprs,
                                 SourceLocation EndLoc) {
+  DiagnoseCBCInlineAsm(AsmLoc);
+
   bool IsSimple = (NumOutputs != 0 || NumInputs != 0);
   setFunctionHasBranchProtectedScope();
 

@@ -5,7 +5,7 @@ add_custom_command(
   OUTPUT ${CBC_CRT_BC}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${CBC_LIB_DIR}
   COMMAND ${LLVM_RUNTIME_OUTPUT_INTDIR}/clang
-          --target=cbc_x86_64-unknown-linux-gnu -O2 -emit-llvm -c
+          --target=x86_64-unknown-linux-gnu -fcbc -O2 -emit-llvm -c
           -I${CMAKE_CURRENT_SOURCE_DIR}/crt
           ${CMAKE_CURRENT_SOURCE_DIR}/crt/crt-cbc.c -o ${CBC_CRT_BC}
   DEPENDS clang ${CMAKE_CURRENT_SOURCE_DIR}/crt/crt-cbc.c
@@ -15,7 +15,7 @@ add_custom_command(
   OUTPUT ${CBC_CATCH_STUB_BC}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${CBC_LIB_DIR}
   COMMAND ${LLVM_RUNTIME_OUTPUT_INTDIR}/clang
-          --target=cbc_x86_64-unknown-linux-gnu -O2 -emit-llvm -c
+          --target=x86_64-unknown-linux-gnu -fcbc -O2 -emit-llvm -c
           ${CMAKE_CURRENT_SOURCE_DIR}/crt/cbc_can_catch_stub.c
           -o ${CBC_CATCH_STUB_BC}
   DEPENDS clang ${CMAKE_CURRENT_SOURCE_DIR}/crt/cbc_can_catch_stub.c

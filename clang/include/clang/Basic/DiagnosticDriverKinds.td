@@ -98,6 +98,14 @@ def err_drv_hipspv_no_hip_path : Error<
 def err_drv_cbc_missing_cangjie_home : Error<
   "CBC shared library link requires CANGJIE_HOME (for libcbcengine and "
   "libcangjie-runtime)">;
+def err_drv_cbc_not_an_arch : Error<
+  "CBC is not a clang architecture; use "
+  "'--target=x86_64-unknown-linux-gnu -fcbc'">;
+def err_drv_cbc_unsupported_target : Error<
+  "-fcbc is only supported for x86_64 Linux in this stage "
+  "(got '%0')">;
+def err_drv_cbc_fopenmp : Error<
+  "OpenMP is not supported with -fcbc">;
 
 def err_drv_sycl_no_rdc_multiple_targets : Error<
   "'%0' is not supported with multiple SYCL offloading targets">;

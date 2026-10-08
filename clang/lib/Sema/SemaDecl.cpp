@@ -9003,6 +9003,12 @@ void Sema::CheckVariableDeclarationType(VarDecl *NewVD) {
   if (T->isUndeducedType())
     return;
 
+  // CBC: warn on object definitions of long double in user code.
+  // Declarations (extern) are silent.
+  if (!NewVD->hasExternalStorage() &&
+      typeInvolvesCBCForbiddenLongDouble(T))
+    DiagnoseCBCLongDouble(NewVD->getLocation());
+
   if (NewVD->hasAttrs())
     CheckAlignasUnderalignment(NewVD);
 
@@ -16964,6 +16970,10 @@ Decl *Sema::ActOnFinishFunctionBody(Decl *dcl, Stmt *Body, bool IsInstantiation,
            diag::err_sycl_external_invalid_deleted_function)
           << SEAttr;
   }
+
+  // CBC: warn on function definitions whose prototype involves long double.
+  if (FD && Body && !FD->isInvalidDecl())
+    DiagnoseCBCLongDoubleInFunctionType(FD->getLocation(), FD->getType());
 
   {
     // Do not call PopExpressionEvaluationContext() if it is a lambda because

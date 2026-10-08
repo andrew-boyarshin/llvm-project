@@ -314,7 +314,13 @@ endif()
 # Feature options -------------------------------------------------------------
 option(LIBCXX_HAS_MUSL_LIBC "Build libc++ with support for the Musl C library" OFF)
 option(LIBCXX_HAS_PTHREAD_API "Ignore auto-detection and force use of pthread API" OFF)
-if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+# CBC: legacy cbc_* triples or host triple + -fcbc.
+set(_LIBCXX_IS_CBC OFF)
+if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc" OR
+    CMAKE_CXX_FLAGS MATCHES "(^| )-fcbc( |$)")
+  set(_LIBCXX_IS_CBC ON)
+endif()
+if (_LIBCXX_IS_CBC)
   if (LIBCXX_HAS_PTHREAD_API)
     message(FATAL_ERROR
       "LIBCXX_HAS_PTHREAD_API is not supported on CBC "
@@ -325,6 +331,11 @@ if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
   set(LIBCXX_USE_COMPILER_RT ON CACHE BOOL
       "CBC uses compiler-rt builtins." FORCE)
 endif()
+
+# Long-double operating definitions (math overloads, stold, %Lf). CBC sets OFF
+# via configure-runtimes.sh (-DLIBCXX_ENABLE_LONG_DOUBLE=OFF).
+option(LIBCXX_ENABLE_LONG_DOUBLE
+  "Provide libc++ APIs that operate on long double." ON)
 option(LIBCXX_HAS_WIN32_THREAD_API "Ignore auto-detection and force use of win32 thread API" OFF)
 option(LIBCXX_HAS_EXTERNAL_THREAD_API
   "Build libc++ with an externalized threading API.
@@ -536,6 +547,11 @@ set(LIBCXX_ADDITIONAL_COMPILE_FLAGS "" CACHE STRING
      `-Xclang -foo` option groups), consider using `SHELL:` (https://cmake.org/cmake/help/latest/command/add_compile_options.html#option-de-duplication).")
 set(LIBCXX_ADDITIONAL_LIBRARIES "" CACHE STRING
     "Additional libraries libc++ is linked to which can be provided in cache")
+
+# CBC headers are -I (not -isystem); silence Sema long-double / asm warnings.
+if (_LIBCXX_IS_CBC)
+  list(APPEND LIBCXX_COMPILE_FLAGS -Wno-cbc-unsupported)
+endif()
 
 # Include macros for adding and removing libc++ flags.
 include(HandleLibcxxFlags)
@@ -772,6 +788,7 @@ config_define(${LIBCXX_ENABLE_UNICODE} _LIBCPP_HAS_UNICODE)
 config_define(${LIBCXX_ENABLE_WIDE_CHARACTERS} _LIBCPP_HAS_WIDE_CHARACTERS)
 config_define(${LIBCXX_ENABLE_TIME_ZONE_DATABASE} _LIBCPP_HAS_TIME_ZONE_DATABASE)
 config_define(${LIBCXX_ENABLE_VENDOR_AVAILABILITY_ANNOTATIONS} _LIBCPP_HAS_VENDOR_AVAILABILITY_ANNOTATIONS)
+config_define(${LIBCXX_ENABLE_LONG_DOUBLE} _LIBCPP_HAS_LONG_DOUBLE)
 
 # Set C library in use
 if (RUNTIMES_USE_LIBC STREQUAL "picolibc")

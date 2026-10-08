@@ -4298,6 +4298,7 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
   // Since the target specific builtins for each arch overlap, only check those
   // of the arch we are compiling for.
   if (Context.BuiltinInfo.isTSBuiltin(BuiltinID)) {
+    DiagnoseCBCTargetBuiltin(TheCall->getBeginLoc());
     if (Context.BuiltinInfo.isAuxBuiltinID(BuiltinID)) {
       assert(Context.getAuxTargetInfo() &&
              "Aux Target Builtin, but not an aux target?");
@@ -4894,6 +4895,9 @@ bool Sema::CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall,
   checkCall(FDecl, Proto, ImplicitThis, llvm::ArrayRef(Args, NumArgs),
             IsMemberFunction, TheCall->getRParenLoc(),
             TheCall->getCallee()->getSourceRange(), CallType);
+
+  // CBC: warn when calling a function whose prototype involves long double.
+  DiagnoseCBCLongDoubleInFunctionType(TheCall->getBeginLoc(), FDecl->getType());
 
   IdentifierInfo *FnInfo = FDecl->getIdentifier();
   // None of the checks below are needed for functions that don't have
@@ -9437,6 +9441,12 @@ bool CheckPrintfHandler::HandlePrintfSpecifier(
     HandleInvalidLengthModifier(FS, CS, startSpecifier, specifierLen,
                                 diag::warn_format_non_standard_conversion_spec);
 
+  // CBC: '%L' selects long double; warn in user code.
+  if (FS.getLengthModifier().getKind() ==
+          analyze_format_string::LengthModifier::AsLongDouble &&
+      S.cbcForbidsLongDouble())
+    S.DiagnoseCBCLongDouble(getLocationOfByte(startSpecifier));
+
   if (!FS.hasStandardConversionSpecifier(S.getLangOpts()))
     HandleNonStandardConversionSpecifier(CS, startSpecifier, specifierLen);
 
@@ -10116,6 +10126,12 @@ bool CheckScanfHandler::HandleScanfSpecifier(
   else if (!FS.hasStandardLengthConversionCombination())
     HandleInvalidLengthModifier(FS, CS, startSpecifier, specifierLen,
                                 diag::warn_format_non_standard_conversion_spec);
+
+  // CBC: '%L' selects long double; warn in user code.
+  if (FS.getLengthModifier().getKind() ==
+          analyze_format_string::LengthModifier::AsLongDouble &&
+      S.cbcForbidsLongDouble())
+    S.DiagnoseCBCLongDouble(getLocationOfByte(startSpecifier));
 
   if (!FS.hasStandardConversionSpecifier(S.getLangOpts()))
     HandleNonStandardConversionSpecifier(CS, startSpecifier, specifierLen);

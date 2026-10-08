@@ -404,10 +404,12 @@ fpclassify(double __x) _NOEXCEPT {
   return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, __x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI _LIBCPP_PREFERRED_OVERLOAD int
 fpclassify(long double __x) _NOEXCEPT {
   return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, __x);
 }
+#endif
 
 template <class _A1, std::__enable_if_t<std::is_integral<_A1>::value, int> = 0>
 [[__nodiscard__]] inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI _LIBCPP_PREFERRED_OVERLOAD int
@@ -425,10 +427,12 @@ template <class = int>
   return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, __x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <class = int>
 [[__nodiscard__]] inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI int fpclassify(long double __x) _NOEXCEPT {
   return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, __x);
 }
+#endif
 
 template <class _A1, std::__enable_if_t<std::is_integral<_A1>::value, int> = 0>
 [[__nodiscard__]] inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI int fpclassify(_A1 __x) _NOEXCEPT {
@@ -523,7 +527,9 @@ using std::__math::lround;
 using std::__math::modf;
 using std::__math::nearbyint;
 using std::__math::nextafter;
+#if _LIBCPP_HAS_LONG_DOUBLE
 using std::__math::nexttoward;
+#endif
 using std::__math::pow;
 using std::__math::remainder;
 using std::__math::remquo;

@@ -101,10 +101,12 @@ inline _LIBCPP_HIDE_FROM_ABI double __str_to_float_c_locale<double>(const char* 
   return ::strtod_l(__nptr, __endptr, __get_c_locale());
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <>
 inline _LIBCPP_HIDE_FROM_ABI long double __str_to_float_c_locale<long double>(const char* __nptr, char** __endptr) {
   return ::strtold_l(__nptr, __endptr, __get_c_locale());
 }
+#endif
 
 //
 // Character manipulation functions

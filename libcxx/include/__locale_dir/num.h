@@ -375,10 +375,12 @@ public:
     return do_get(__b, __e, __iob, __err, __v);
   }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
   _LIBCPP_HIDE_FROM_ABI iter_type
   get(iter_type __b, iter_type __e, ios_base& __iob, ios_base::iostate& __err, long double& __v) const {
     return do_get(__b, __e, __iob, __err, __v);
   }
+#endif
 
   _LIBCPP_HIDE_FROM_ABI iter_type
   get(iter_type __b, iter_type __e, ios_base& __iob, ios_base::iostate& __err, void*& __v) const {
@@ -659,10 +661,12 @@ protected:
     return this->__do_get_floating_point(__b, __e, __iob, __err, __v);
   }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
   virtual iter_type
   do_get(iter_type __b, iter_type __e, ios_base& __iob, ios_base::iostate& __err, long double& __v) const {
     return this->__do_get_floating_point(__b, __e, __iob, __err, __v);
   }
+#endif
 
   virtual iter_type do_get(iter_type __b, iter_type __e, ios_base& __iob, ios_base::iostate& __err, void*& __v) const;
 };
@@ -873,9 +877,11 @@ public:
     return do_put(__s, __iob, __fl, __v);
   }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
   _LIBCPP_HIDE_FROM_ABI iter_type put(iter_type __s, ios_base& __iob, char_type __fl, long double __v) const {
     return do_put(__s, __iob, __fl, __v);
   }
+#endif
 
   _LIBCPP_HIDE_FROM_ABI iter_type put(iter_type __s, ios_base& __iob, char_type __fl, const void* __v) const {
     return do_put(__s, __iob, __fl, __v);
@@ -892,7 +898,9 @@ protected:
   virtual iter_type do_put(iter_type __s, ios_base& __iob, char_type __fl, unsigned long) const;
   virtual iter_type do_put(iter_type __s, ios_base& __iob, char_type __fl, unsigned long long) const;
   virtual iter_type do_put(iter_type __s, ios_base& __iob, char_type __fl, double __v) const;
+#if _LIBCPP_HAS_LONG_DOUBLE
   virtual iter_type do_put(iter_type __s, ios_base& __iob, char_type __fl, long double __v) const;
+#endif
   virtual iter_type do_put(iter_type __s, ios_base& __iob, char_type __fl, const void* __v) const;
 
   template <class _Integral>
@@ -1068,11 +1076,13 @@ num_put<_CharT, _OutputIterator>::do_put(iter_type __s, ios_base& __iob, char_ty
   return this->__do_put_floating_point(__s, __iob, __fl, __v, "");
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <class _CharT, class _OutputIterator>
 _OutputIterator
 num_put<_CharT, _OutputIterator>::do_put(iter_type __s, ios_base& __iob, char_type __fl, long double __v) const {
   return this->__do_put_floating_point(__s, __iob, __fl, __v, "L");
 }
+#endif
 
 template <class _CharT, class _OutputIterator>
 _OutputIterator

@@ -220,6 +220,7 @@ def GNUCaseRange : DiagGroup<"gnu-case-range">;
 def CastAlign : DiagGroup<"cast-align">;
 def CastQual : DiagGroup<"cast-qual">;
 def : DiagGroup<"char-align">;
+def CBCUnsupported : DiagGroup<"cbc-unsupported">;
 def Comment : DiagGroup<"comment">;
 def GNUComplexInteger : DiagGroup<"gnu-complex-integer">;
 def GNUConditionalOmittedOperand : DiagGroup<"gnu-conditional-omitted-operand">;

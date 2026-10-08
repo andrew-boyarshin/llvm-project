@@ -33,7 +33,9 @@ public:
     return &TSInfo;
   }
   void initLibcallLoweringInfo(LibcallLoweringInfo &Info) const override;
-  bool isX86_64() const { return TT.isCBCHostX86_64(); }
+  bool isX86_64() const {
+    return TT.isCBCHostX86_64() || TT.getArch() == Triple::x86_64;
+  }
   bool enableIndirectBrExpand() const override { return true; }
 };
 } // namespace llvm

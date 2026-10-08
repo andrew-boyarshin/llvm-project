@@ -203,10 +203,12 @@ inline double as_float(const string& func, const string& s, size_t* idx) {
   return as_float_helper<double>(func, s, idx, strtod);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <>
 inline long double as_float(const string& func, const string& s, size_t* idx) {
   return as_float_helper<long double>(func, s, idx, strtold);
 }
+#endif
 
 #if _LIBCPP_HAS_WIDE_CHARACTERS
 template <>
@@ -219,10 +221,12 @@ inline double as_float(const string& func, const wstring& s, size_t* idx) {
   return as_float_helper<double>(func, s, idx, wcstod);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <>
 inline long double as_float(const string& func, const wstring& s, size_t* idx) {
   return as_float_helper<long double>(func, s, idx, wcstold);
 }
+#endif
 #endif // _LIBCPP_HAS_WIDE_CHARACTERS
 
 } // unnamed namespace
@@ -245,7 +249,9 @@ float stof(const string& str, size_t* idx) { return as_float<float>("stof", str,
 
 double stod(const string& str, size_t* idx) { return as_float<double>("stod", str, idx); }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 long double stold(const string& str, size_t* idx) { return as_float<long double>("stold", str, idx); }
+#endif
 
 #if _LIBCPP_HAS_WIDE_CHARACTERS
 int stoi(const wstring& str, size_t* idx, int base) { return as_integer<int>("stoi", str, idx, base); }
@@ -266,7 +272,9 @@ float stof(const wstring& str, size_t* idx) { return as_float<float>("stof", str
 
 double stod(const wstring& str, size_t* idx) { return as_float<double>("stod", str, idx); }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 long double stold(const wstring& str, size_t* idx) { return as_float<long double>("stold", str, idx); }
+#endif
 #endif // _LIBCPP_HAS_WIDE_CHARACTERS
 
 // to_string
@@ -360,12 +368,16 @@ wstring to_wstring(unsigned long long val) { return i_to_string<wstring>(val); }
 
 string to_string(float val) { return as_string(snprintf, initial_string< string>()(), "%f", val); }
 string to_string(double val) { return as_string(snprintf, initial_string< string>()(), "%f", val); }
+#if _LIBCPP_HAS_LONG_DOUBLE
 string to_string(long double val) { return as_string(snprintf, initial_string< string>()(), "%Lf", val); }
+#endif
 
 #if _LIBCPP_HAS_WIDE_CHARACTERS
 wstring to_wstring(float val) { return as_string(get_swprintf(), initial_string<wstring>()(), L"%f", val); }
 wstring to_wstring(double val) { return as_string(get_swprintf(), initial_string<wstring>()(), L"%f", val); }
+#if _LIBCPP_HAS_LONG_DOUBLE
 wstring to_wstring(long double val) { return as_string(get_swprintf(), initial_string<wstring>()(), L"%Lf", val); }
+#endif
 #endif
 
 _LIBCPP_END_EXPLICIT_ABI_ANNOTATIONS

@@ -38,9 +38,11 @@ _LIBCPP_HIDE_FROM_ABI double hypot(double __x, double __y) _NOEXCEPT {
   return __builtin_hypot(__x, __y);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double hypot(long double __x, long double __y) _NOEXCEPT {
   return __builtin_hypotl(__x, __y);
 }
+#endif
 
 template <class _A1, class _A2, __enable_if_t<is_arithmetic<_A1>::value && is_arithmetic<_A2>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI __promote_t<_A1, _A2> hypot(_A1 __x, _A2 __y) _NOEXCEPT {
@@ -83,9 +85,11 @@ inline _LIBCPP_HIDE_FROM_ABI float hypot(float __x, float __y, float __z) { retu
 
 inline _LIBCPP_HIDE_FROM_ABI double hypot(double __x, double __y, double __z) { return __math::__hypot(__x, __y, __z); }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double hypot(long double __x, long double __y, long double __z) {
   return __math::__hypot(__x, __y, __z);
 }
+#endif
 
 template <class _A1,
           class _A2,

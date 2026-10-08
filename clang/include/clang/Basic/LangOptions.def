@@ -225,6 +225,8 @@ LANGOPT(NativeHalfArgsAndReturns, 1, 0, NotCompatible, "Native half args and ret
 LANGOPT(NativeInt16Type   , 1, 1, NotCompatible, "Native int 16 type support")
 LANGOPT(CUDA              , 1, 0, NotCompatible, "CUDA")
 LANGOPT(HIP               , 1, 0, NotCompatible, "HIP")
+LANGOPT(CBC               , 1, 0, NotCompatible, "CBC bytecode compilation (-fcbc)")
+
 LANGOPT(OpenMP            , 32, 0, NotCompatible, "OpenMP support and version of OpenMP (31, 40 or 45)")
 LANGOPT(OpenMPExtensions  , 1, 1, NotCompatible, "Enable all Clang extensions for OpenMP directives and clauses")
 LANGOPT(OpenMPSimd        , 1, 0, NotCompatible, "Use SIMD only OpenMP support.")

@@ -14,11 +14,14 @@
 #include "lld/CBC/CBCLink.h"
 #include "lld/Common/ErrorHandler.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -29,6 +32,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/CBCABI.h"
 #include "llvm/TargetParser/Triple.h"
 #include "CBCFileWriter.h"
 #include <set>
@@ -45,6 +49,15 @@ const Target *findCBCTarget() {
     if (StringRef(T.getName()) == "cbc")
       return &T;
   return nullptr;
+}
+
+/// Require !"CBC" on \p M. Returns false after reporting an error.
+bool checkCBCModuleFlag(Module &M, StringRef Ident) {
+  if (!M.getModuleFlag(CBCModuleFlagKey)) {
+    error("'" + Ident + "' was not compiled with -fcbc (missing CBC module flag)");
+    return false;
+  }
+  return true;
 }
 
 } // namespace
@@ -66,6 +79,7 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
   Linker L(*Composite);
 
   Triple ExpectedTriple = request.triple;
+  bool SawCBC = false;
   for (MemoryBufferRef MB : request.wholeModules) {
     std::unique_ptr<Module> M = parseIR(MB, Err, Ctx);
     if (!M) {
@@ -73,6 +87,9 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
       error("failed to parse bitcode '" + MB.getBufferIdentifier() + "'");
       return false;
     }
+    if (!checkCBCModuleFlag(*M, MB.getBufferIdentifier()))
+      return false;
+    SawCBC = true;
     Triple MT(M->getTargetTriple());
     if (ExpectedTriple.getTriple().empty())
       ExpectedTriple = MT;
@@ -88,6 +105,9 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
   }
   if (ExpectedTriple.getTriple().empty())
     ExpectedTriple = request.triple;
+  // Seed the composite so an empty-dest IRMover path cannot drop the flag.
+  if (SawCBC && !Composite->getModuleFlag(CBCModuleFlagKey))
+    Composite->addModuleFlag(Module::Error, CBCModuleFlagKey, uint32_t(1));
 
   // Lazy bitcode archives: cbc-ld 64-round loop (not ELF lazy BitcodeFile).
   std::set<std::pair<std::string, uint64_t>> Extracted;
@@ -161,6 +181,8 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
           error("failed to parse archive member defining " + Item.second);
           return false;
         }
+        if (!checkCBCModuleFlag(*M, Path.str() + "(" + Item.second + ")"))
+          return false;
         if (L.linkInModule(std::move(M))) {
           error("failed to link member of " + Path + " defining " +
                 Item.second);
@@ -188,6 +210,8 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
   }
 
   Composite->setTargetTriple(ExpectedTriple);
+  if (SawCBC && !Composite->getModuleFlag(CBCModuleFlagKey))
+    Composite->addModuleFlag(Module::Error, CBCModuleFlagKey, uint32_t(1));
   Composite->addModuleFlag(Module::Warning, "cbc-whole-program", uint32_t(1));
   if (request.wrap)
     Composite->addModuleFlag(Module::Warning, "cbc-wrap", uint32_t(1));
@@ -215,11 +239,28 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
         CB->removeFnAttr(Attribute::NoUnwind);
   }
 
+  // Construct CBC TM before O2 so TargetIRAnalysis uses CBC TTI (no vector
+  // registers), not the default TTI that claims 8 vector regs.
+  const Target *T = findCBCTarget();
+  if (!T) {
+    error("CBC target is not registered");
+    return false;
+  }
+  TargetOptions Options;
+  auto TM = std::unique_ptr<TargetMachine>(T->createTargetMachine(
+      ExpectedTriple, "", "", Options, Reloc::Static, CodeModel::Small,
+      CodeGenOptLevel::Default));
+  if (!TM) {
+    error("cannot create CBC target machine");
+    return false;
+  }
+  Composite->setDataLayout(TM->createDataLayout());
+
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
-  PassBuilder PB;
+  PassBuilder PB(TM.get());
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
   PB.registerFunctionAnalyses(FAM);
@@ -287,21 +328,6 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
   }
   if (Failed)
     return false;
-
-  const Target *T = findCBCTarget();
-  if (!T) {
-    error("CBC target is not registered");
-    return false;
-  }
-  TargetOptions Options;
-  auto TM = std::unique_ptr<TargetMachine>(T->createTargetMachine(
-      ExpectedTriple, "", "", Options, Reloc::Static, CodeModel::Small,
-      CodeGenOptLevel::Default));
-  if (!TM) {
-    error("cannot create CBC target machine");
-    return false;
-  }
-  Composite->setDataLayout(TM->createDataLayout());
 
   // Before codegen: SynthesizeEntry (in the emit pipeline) renames main→__cbc_main.
   if (Function *Main = Composite->getFunction("main"))

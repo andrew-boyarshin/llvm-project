@@ -30,7 +30,9 @@ _LIBCPP_HIDE_FROM_ABI double acosh(double __x) _NOEXCEPT {
   return __builtin_acosh(__x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double acosh(long double __x) _NOEXCEPT { return __builtin_acoshl(__x); }
+#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double acosh(_A1 __x) _NOEXCEPT {
@@ -46,7 +48,9 @@ _LIBCPP_HIDE_FROM_ABI double asinh(double __x) _NOEXCEPT {
   return __builtin_asinh(__x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double asinh(long double __x) _NOEXCEPT { return __builtin_asinhl(__x); }
+#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double asinh(_A1 __x) _NOEXCEPT {
@@ -62,7 +66,9 @@ _LIBCPP_HIDE_FROM_ABI double atanh(double __x) _NOEXCEPT {
   return __builtin_atanh(__x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double atanh(long double __x) _NOEXCEPT { return __builtin_atanhl(__x); }
+#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double atanh(_A1 __x) _NOEXCEPT {

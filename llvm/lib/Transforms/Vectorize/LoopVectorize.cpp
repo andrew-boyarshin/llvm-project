@@ -7784,6 +7784,15 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     return false;
   }
 
+  // CBC bytecode has no vector registers; skip even if TTI is missing.
+  if (F->hasFnAttribute("cbc")) {
+    reportVectorizationFailure(
+        "Can't vectorize CBC functions",
+        "loop not vectorized due to cbc attribute", "cbc", ORE, L);
+    Hints.emitRemarkWithHints();
+    return false;
+  }
+
   // Check if the target supports potentially unsafe FP vectorization.
   // FIXME: Add a check for the type of safety issue (denormal, signaling)
   // for the target we're vectorizing for, to make sure none of the

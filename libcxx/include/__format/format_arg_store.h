@@ -103,10 +103,12 @@ template <class, same_as<double> _Tp>
 consteval __arg_t __determine_arg_t() {
   return __arg_t::__double;
 }
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <class, same_as<long double> _Tp>
 consteval __arg_t __determine_arg_t() {
   return __arg_t::__long_double;
 }
+#endif
 
 // Char pointer
 template <class _Context, class _Tp>

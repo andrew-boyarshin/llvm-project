@@ -46,10 +46,12 @@ to_chars_result to_chars(char* __first, char* __last, double __value) {
   return _Floating_to_chars<_Floating_to_chars_overload::_Plain>(__first, __last, __value, chars_format{}, 0);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 to_chars_result to_chars(char* __first, char* __last, long double __value) {
   return _Floating_to_chars<_Floating_to_chars_overload::_Plain>(
       __first, __last, static_cast<double>(__value), chars_format{}, 0);
 }
+#endif
 
 to_chars_result to_chars(char* __first, char* __last, float __value, chars_format __fmt) {
   return _Floating_to_chars<_Floating_to_chars_overload::_Format_only>(__first, __last, __value, __fmt, 0);
@@ -59,10 +61,12 @@ to_chars_result to_chars(char* __first, char* __last, double __value, chars_form
   return _Floating_to_chars<_Floating_to_chars_overload::_Format_only>(__first, __last, __value, __fmt, 0);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 to_chars_result to_chars(char* __first, char* __last, long double __value, chars_format __fmt) {
   return _Floating_to_chars<_Floating_to_chars_overload::_Format_only>(
       __first, __last, static_cast<double>(__value), __fmt, 0);
 }
+#endif
 
 to_chars_result to_chars(char* __first, char* __last, float __value, chars_format __fmt, int __precision) {
   return _Floating_to_chars<_Floating_to_chars_overload::_Format_precision>(
@@ -74,10 +78,12 @@ to_chars_result to_chars(char* __first, char* __last, double __value, chars_form
       __first, __last, __value, __fmt, __precision);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 to_chars_result to_chars(char* __first, char* __last, long double __value, chars_format __fmt, int __precision) {
   return _Floating_to_chars<_Floating_to_chars_overload::_Format_precision>(
       __first, __last, static_cast<double>(__value), __fmt, __precision);
 }
+#endif
 
 template <class _Fp>
 __from_chars_result<_Fp> __from_chars_floating_point(

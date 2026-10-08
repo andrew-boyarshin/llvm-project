@@ -64,6 +64,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/NVPTXAddrSpace.h"
 #include <algorithm>
+#include "llvm/TargetParser/CBCABI.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -367,6 +368,10 @@ bool ExpandVariadics::runOnModule(Module &M) {
 
   Triple TT(M.getTargetTriple());
   ABI = VariadicABIInfo::create(TT);
+  // After -fcbc the module triple is the host (x86_64); select CBC va_arg
+  // lowering from the !"CBC" module flag (or a leftover Triple::cbc).
+  if (!ABI && (TT.isCBC() || M.getModuleFlag(CBCModuleFlagKey)))
+    ABI = VariadicABIInfo::create(Triple("cbc-unknown-unknown"));
   if (!ABI)
     return Changed;
 

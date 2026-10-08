@@ -237,10 +237,12 @@ public:
 
   _LIBCPP_HIDE_FROM_ABI explicit money_get(size_t __refs = 0) : locale::facet(__refs) {}
 
+#if _LIBCPP_HAS_LONG_DOUBLE
   _LIBCPP_HIDE_FROM_ABI iter_type
   get(iter_type __b, iter_type __e, bool __intl, ios_base& __iob, ios_base::iostate& __err, long double& __v) const {
     return do_get(__b, __e, __intl, __iob, __err, __v);
   }
+#endif
 
   _LIBCPP_HIDE_FROM_ABI iter_type
   get(iter_type __b, iter_type __e, bool __intl, ios_base& __iob, ios_base::iostate& __err, string_type& __v) const {
@@ -252,8 +254,10 @@ public:
 protected:
   _LIBCPP_HIDE_FROM_ABI_VIRTUAL ~money_get() override {}
 
+#if _LIBCPP_HAS_LONG_DOUBLE
   virtual iter_type
   do_get(iter_type __b, iter_type __e, bool __intl, ios_base& __iob, ios_base::iostate& __err, long double& __v) const;
+#endif
   virtual iter_type
   do_get(iter_type __b, iter_type __e, bool __intl, ios_base& __iob, ios_base::iostate& __err, string_type& __v) const;
 
@@ -471,6 +475,7 @@ bool money_get<_CharT, _InputIterator>::__do_get(
   return true;
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <class _CharT, class _InputIterator>
 _InputIterator money_get<_CharT, _InputIterator>::do_get(
     iter_type __b, iter_type __e, bool __intl, ios_base& __iob, ios_base::iostate& __err, long double& __v) const {
@@ -509,6 +514,7 @@ _InputIterator money_get<_CharT, _InputIterator>::do_get(
     __err |= ios_base::eofbit;
   return __b;
 }
+#endif
 
 template <class _CharT, class _InputIterator>
 _InputIterator money_get<_CharT, _InputIterator>::do_get(
@@ -729,10 +735,12 @@ public:
 
   _LIBCPP_HIDE_FROM_ABI explicit money_put(size_t __refs = 0) : locale::facet(__refs) {}
 
+#if _LIBCPP_HAS_LONG_DOUBLE
   _LIBCPP_HIDE_FROM_ABI iter_type
   put(iter_type __s, bool __intl, ios_base& __iob, char_type __fl, long double __units) const {
     return do_put(__s, __intl, __iob, __fl, __units);
   }
+#endif
 
   _LIBCPP_HIDE_FROM_ABI iter_type
   put(iter_type __s, bool __intl, ios_base& __iob, char_type __fl, const string_type& __digits) const {
@@ -744,7 +752,9 @@ public:
 protected:
   _LIBCPP_HIDE_FROM_ABI_VIRTUAL ~money_put() override {}
 
+#if _LIBCPP_HAS_LONG_DOUBLE
   virtual iter_type do_put(iter_type __s, bool __intl, ios_base& __iob, char_type __fl, long double __units) const;
+#endif
   virtual iter_type
   do_put(iter_type __s, bool __intl, ios_base& __iob, char_type __fl, const string_type& __digits) const;
 };
@@ -752,6 +762,7 @@ protected:
 template <class _CharT, class _OutputIterator>
 locale::id money_put<_CharT, _OutputIterator>::id;
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <class _CharT, class _OutputIterator>
 _OutputIterator money_put<_CharT, _OutputIterator>::do_put(
     iter_type __s, bool __intl, ios_base& __iob, char_type __fl, long double __units) const {
@@ -808,6 +819,7 @@ _OutputIterator money_put<_CharT, _OutputIterator>::do_put(
       __mb, __mi, __me, __iob.flags(), __db, __db + __n, __ct, __neg, __pat, __dp, __ts, __grp, __sym, __sn, __fd);
   return std::__pad_and_output(__s, __mb, __mi, __me, __iob, __fl);
 }
+#endif
 
 template <class _CharT, class _OutputIterator>
 _OutputIterator money_put<_CharT, _OutputIterator>::do_put(

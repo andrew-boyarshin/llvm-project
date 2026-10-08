@@ -2819,6 +2819,19 @@ public:
   void DiagnoseEmptyLoopBody(const Stmt *S, const Stmt *PossibleBody);
 
   /// DiagnoseSelfMove - Emits a warning if a value is moved to itself.
+  //===----------------------------- CBC Features -------------------------===//
+  bool isCBCCompilation() const;
+  bool cbcForbidsLongDouble() const;
+  bool shouldDiagnoseCBCUnsupported(SourceLocation Loc) const;
+  bool isCBCForbiddenLongDouble(QualType T) const;
+  bool typeInvolvesCBCForbiddenLongDouble(QualType T) const;
+  bool functionTypeInvolvesCBCForbiddenLongDouble(QualType T) const;
+  void DiagnoseCBCLongDouble(SourceLocation Loc);
+  void DiagnoseCBCInlineAsm(SourceLocation Loc);
+  void DiagnoseCBCTargetBuiltin(SourceLocation Loc);
+  void DiagnoseCBCTargetAttr(SourceLocation Loc);
+  void DiagnoseCBCLongDoubleInFunctionType(SourceLocation Loc, QualType T);
+
   void DiagnoseSelfMove(const Expr *LHSExpr, const Expr *RHSExpr,
                         SourceLocation OpLoc);
 

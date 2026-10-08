@@ -280,6 +280,10 @@ public:
   LLVM_PREFERRED_TYPE(bool)
   unsigned CCPrintInternalStats : 1;
 
+  /// True when -fcbc was passed; default image name becomes a.cbc.
+  LLVM_PREFERRED_TYPE(bool)
+  unsigned CBCMode : 1;
+
   /// Pointer to the ExecuteCC1Tool function, if available.
   /// When the clangDriver lib is used through clang.exe, this provides a
   /// shortcut for executing the -cc1 command-line directly, in the same

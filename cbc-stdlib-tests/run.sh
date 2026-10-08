@@ -9,7 +9,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 PREFIX="${PREFIX:-$ROOT/build-install}"
-TARGET="${TARGET:-cbc_x86_64-unknown-linux-gnu}"
+TARGET="${TARGET:-x86_64-unknown-linux-gnu}"
+CBC_FLAGS="${CBC_FLAGS:--fcbc}"
 JOBS="${JOBS:-4}"
 CLANG="$PREFIX/bin/clang"
 CLANGXX="$PREFIX/bin/clang++"
@@ -265,13 +266,13 @@ run_one() {
   out="$work/$name.cbc"
   if [[ "$name" == *.cpp ]]; then
     cc="$CLANGXX"
-    if ! "$cc" --target="$TARGET" -std=c++20 "${flags[@]}" -o "$out" "$src" >"$log" 2>&1; then
+    if ! "$cc" --target="$TARGET" $CBC_FLAGS -std=c++20 "${flags[@]}" -o "$out" "$src" >"$log" 2>&1; then
       finish_result 0 "$name" "$torture" compile "$log"
       return 1
     fi
   else
     cc="$CLANG"
-    if ! "$cc" --target="$TARGET" "${flags[@]}" -o "$out" "$src" >"$log" 2>&1; then
+    if ! "$cc" --target="$TARGET" $CBC_FLAGS "${flags[@]}" -o "$out" "$src" >"$log" 2>&1; then
       finish_result 0 "$name" "$torture" compile "$log"
       return 1
     fi
@@ -372,7 +373,7 @@ int main(void) {
   return 0;
 }
 EOF
-if "$CLANG" --target="$TARGET" -o "$work/qsort.cbc" "$qsort_src" >"$work/qsort.log" 2>&1; then
+if "$CLANG" --target="$TARGET" $CBC_FLAGS -o "$work/qsort.cbc" "$qsort_src" >"$work/qsort.log" 2>&1; then
   echo "FAIL qsort.c expected a link error"
   fail=1
 elif ! grep -q "not supported on CBC" "$work/qsort.log"; then

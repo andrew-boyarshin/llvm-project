@@ -30,6 +30,9 @@ public:
   void
   AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
                             llvm::opt::ArgStringList &CC1Args) const override;
+  void AddClangCXXStdlibIncludeArgs(
+      const llvm::opt::ArgList &DriverArgs,
+      llvm::opt::ArgStringList &CC1Args) const override;
   void addLibStdCxxIncludePaths(
       const llvm::opt::ArgList &DriverArgs,
       llvm::opt::ArgStringList &CC1Args) const override;
@@ -47,9 +50,12 @@ public:
   RuntimeLibType GetDefaultRuntimeLibType() const override;
   unsigned GetDefaultDwarfVersion() const override;
   CXXStdlibType GetDefaultCXXStdlibType() const override;
+  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
   bool
   IsAArch64OutlineAtomicsDefault(const llvm::opt::ArgList &Args) const override;
   bool isPIEDefault(const llvm::opt::ArgList &Args) const override;
+  bool isPICDefault() const override;
+  bool isPICDefaultForced() const override;
   bool IsMathErrnoDefault() const override;
   SanitizerMask
   getSupportedSanitizers(BoundArch BA,
@@ -65,6 +71,10 @@ public:
                         llvm::opt::ArgStringList &CC1Args, BoundArch BA,
                         Action::OffloadKind DeviceOffloadKind) const override;
 
+  LTOKind getDefaultLTOMode() const override;
+  LTOKind getLTOMode(const llvm::opt::ArgList &Args,
+                     Action::OffloadKind Kind = Action::OFK_None) const override;
+
   std::string getDynamicLinker(const llvm::opt::ArgList &Args) const override;
 
   void addExtraOpts(llvm::opt::ArgStringList &CmdArgs) const override;
@@ -73,10 +83,16 @@ public:
 
   const char *getDefaultLinker() const override;
 
+  bool isCBCMode() const { return CBCMode; }
+
 protected:
   Tool *buildAssembler() const override;
   Tool *buildLinker() const override;
   Tool *buildStaticLibTool() const override;
+
+private:
+  /// Set when the driver was invoked with -fcbc on a host Linux triple.
+  bool CBCMode = false;
 };
 
 } // end namespace toolchains

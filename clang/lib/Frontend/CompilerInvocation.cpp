@@ -3896,6 +3896,9 @@ void CompilerInvocationBase::GenerateLangArgs(const LangOptions &Opts,
 
   // Not generating '-mrtd', it's just an alias for '-fdefault-calling-conv='.
 
+  if (Opts.CBC)
+    GenerateArg(Consumer, OPT_fcbc);
+
   // OpenMP was requested via '-fopenmp', not implied by '-fopenmp-simd' or
   // '-fopenmp-targets='.
   if (Opts.OpenMP && !Opts.OpenMPSimd) {
@@ -4338,6 +4341,8 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
       }
     }
   }
+
+  Opts.CBC = Args.hasFlag(OPT_fcbc, OPT_fno_cbc, false);
 
   // Check if -fopenmp is specified and set default version to 5.1.
   Opts.OpenMP = Args.hasArg(OPT_fopenmp) ? 51 : 0;

@@ -34,9 +34,11 @@ template <class = int>
   return __builtin_fmax(__x, __y);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] inline _LIBCPP_HIDE_FROM_ABI long double fmax(long double __x, long double __y) _NOEXCEPT {
   return __builtin_fmaxl(__x, __y);
 }
+#endif
 
 template <class _A1, class _A2, __enable_if_t<is_arithmetic<_A1>::value && is_arithmetic<_A2>::value, int> = 0>
 [[__nodiscard__]] inline _LIBCPP_HIDE_FROM_ABI __promote_t<_A1, _A2> fmax(_A1 __x, _A2 __y) _NOEXCEPT {
@@ -56,9 +58,11 @@ template <class = int>
   return __builtin_fmin(__x, __y);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] inline _LIBCPP_HIDE_FROM_ABI long double fmin(long double __x, long double __y) _NOEXCEPT {
   return __builtin_fminl(__x, __y);
 }
+#endif
 
 template <class _A1, class _A2, __enable_if_t<is_arithmetic<_A1>::value && is_arithmetic<_A2>::value, int> = 0>
 [[__nodiscard__]] inline _LIBCPP_HIDE_FROM_ABI __promote_t<_A1, _A2> fmin(_A1 __x, _A2 __y) _NOEXCEPT {

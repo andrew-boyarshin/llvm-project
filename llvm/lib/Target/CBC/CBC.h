@@ -13,11 +13,13 @@ ModulePass *createCBCLowerGlobalsPass();
 ModulePass *createCBCSynthesizeEntryPass();
 ModulePass *createCBCLowerSjLjPass();
 ModulePass *createCBCLowerEHPass();
+ModulePass *createCBCRejectUnsupportedIRPass();
 void initializeCBCDAGToDAGISelLegacyPass(PassRegistry &);
 void initializeCBCLowerGlobalsLegacyPass(PassRegistry &);
 void initializeCBCSynthesizeEntryLegacyPass(PassRegistry &);
 void initializeCBCLowerSjLjLegacyPass(PassRegistry &);
 void initializeCBCLowerEHLegacyPass(PassRegistry &);
+void initializeCBCRejectUnsupportedIRLegacyPass(PassRegistry &);
 } // namespace llvm
 
 #endif

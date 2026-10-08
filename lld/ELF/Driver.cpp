@@ -44,6 +44,11 @@
 #include "lld/Common/Memory.h"
 #include "lld/Common/Strings.h"
 #include "lld/Common/Version.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/TargetParser/CBCABI.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -3430,6 +3435,25 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
     ctx.symtab->addUnusedUndefined(name)->referenced = true;
 
   parseFiles(ctx, files);
+
+  // Without --cbc, refuse CBC-flagged bitcode (would otherwise LTO as native).
+  if (!ctx.arg.cbcMode) {
+    LLVMContext FlagCtx;
+    SMDiagnostic FlagErr;
+    for (BitcodeFile *F : ctx.bitcodeFiles) {
+      if (!F->obj)
+        continue;
+      std::unique_ptr<Module> M =
+          parseIR(F->mb, FlagErr, FlagCtx);
+      if (!M)
+        continue;
+      if (M->getModuleFlag(CBCModuleFlagKey)) {
+        Err(ctx) << "CBC bitcode '" << F->getName()
+                 << "' cannot be linked without --cbc";
+        return;
+      }
+    }
+  }
 
   // CBC mode: resolve inputs with ELF machinery, then emit a .cbc (or wrap)
   // and skip LTO / Writer on CBC IR. Must not reuse skipLinkedOutput (that

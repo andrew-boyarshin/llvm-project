@@ -18,7 +18,13 @@ set(LIBCXXABI_SOURCES
   private_typeinfo.cpp
 )
 
-if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+set(_LIBCXXABI_IS_CBC OFF)
+if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc" OR
+    CMAKE_CXX_FLAGS MATCHES "(^| )-fcbc( |$)")
+  set(_LIBCXXABI_IS_CBC ON)
+endif()
+
+if (_LIBCXXABI_IS_CBC)
   list(APPEND LIBCXXABI_SOURCES
     cbc_eh_select.cpp
     cbc_exception_storage.cpp
@@ -35,7 +41,7 @@ endif()
 
 if (LIBCXXABI_ENABLE_EXCEPTIONS)
   list(APPEND LIBCXXABI_SOURCES cxa_exception.cpp)
-  if (NOT CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+  if (NOT _LIBCXXABI_IS_CBC)
     list(APPEND LIBCXXABI_SOURCES cxa_personality.cpp)
   endif()
 else()
@@ -46,7 +52,7 @@ endif()
 
 if (LIBCXXABI_ENABLE_THREADS AND (UNIX OR FUCHSIA) AND NOT (APPLE OR CYGWIN)
     AND NOT ("${CMAKE_SYSTEM_NAME}" MATCHES "AIX")
-    AND NOT CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+    AND NOT _LIBCXXABI_IS_CBC)
   list(APPEND LIBCXXABI_SOURCES
     cxa_thread_atexit.cpp
   )

@@ -743,6 +743,7 @@ static Triple::ObjectFormatType parseFormat(StringRef EnvironmentName) {
       .EndsWith("macho", Triple::MachO)
       .EndsWith("wasm", Triple::Wasm)
       .EndsWith("spirv", Triple::SPIRV)
+      .EndsWith("cbc", Triple::CBC)
       .Default(Triple::UnknownObjectFormat);
 }
 

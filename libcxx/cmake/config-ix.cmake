@@ -104,7 +104,8 @@ endif()
 check_symbol_exists(__PICOLIBC__ "string.h" PICOLIBC)
 
 # Check libraries
-if(CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+if(CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc" OR
+   CMAKE_CXX_FLAGS MATCHES "(^| )-fcbc( |$)")
   set(LIBCXX_HAS_PTHREAD_LIB NO)
   set(LIBCXX_HAS_RT_LIB NO)
   set(LIBCXX_HAS_ATOMIC_LIB NO)

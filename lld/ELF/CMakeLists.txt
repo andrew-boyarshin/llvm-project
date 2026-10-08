@@ -69,6 +69,7 @@ add_lld_library(lldELF
   DebugInfoDWARF
   Demangle
   DTLTO
+  IRReader
   LTO
   MC
   Object

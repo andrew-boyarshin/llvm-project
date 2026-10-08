@@ -63,10 +63,12 @@ inline _LIBCPP_HIDE_FROM_ABI float strtof_l(const char* __nptr, char** __endptr,
   return ::strtof(__nptr, __endptr);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double strtold_l(const char* __nptr, char** __endptr, locale_t locale) {
   __setAndRestore __newloc(locale);
   return ::strtold(__nptr, __endptr);
 }
+#endif
 
 inline _LIBCPP_HIDE_FROM_ABI
 _LIBCPP_ATTRIBUTE_FORMAT(__printf__, 2, 0) int vasprintf(char** strp, const char* fmt, va_list ap) {

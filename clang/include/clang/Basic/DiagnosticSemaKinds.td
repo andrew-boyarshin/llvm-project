@@ -10118,6 +10118,19 @@ let CategoryName = "Inline Assembly Issue" in {
   def err_asm_operand_empty_string : Error<
      "cannot use an empty string literal in 'asm'">;
 
+  def warn_cbc_long_double : Warning<
+    "'long double' operations are not available in CBC code">,
+    InGroup<CBCUnsupported>;
+  def warn_cbc_inline_asm : Warning<
+    "inline assembly is not available in CBC code">,
+    InGroup<CBCUnsupported>;
+  def warn_cbc_target_builtin : Warning<
+    "target-specific builtin is not available in CBC code">,
+    InGroup<CBCUnsupported>;
+  def warn_cbc_target_attr : Warning<
+    "'target' attribute selects an ISA that CBC bytecode does not support">,
+    InGroup<CBCUnsupported>;
+
   def err_asm_pmf_through_constraint_not_permitted
     : Error<"cannot pass a pointer-to-member through register-constrained "
             "inline assembly parameter">;

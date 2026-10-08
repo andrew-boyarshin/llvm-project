@@ -977,6 +977,13 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
   if (CGM.getCodeGenOpts().NoUseJumpTables)
     Fn->addFnAttr("no-jump-tables", "true");
 
+  // CBC bytecode: every function is CBC; skip jump tables at the function
+  // level (do not pass -fno-jump-tables TU-wide).
+  if (CGM.getLangOpts().CBC) {
+    Fn->addFnAttr("cbc");
+    Fn->addFnAttr("no-jump-tables", "true");
+  }
+
   // Add no-inline-line-tables value.
   if (CGM.getCodeGenOpts().NoInlineLineTables)
     Fn->addFnAttr("no-inline-line-tables");

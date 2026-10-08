@@ -152,7 +152,9 @@ public:
   basic_ostream& operator<<(unsigned long long __n);
   basic_ostream& operator<<(float __f);
   basic_ostream& operator<<(double __f);
+#if _LIBCPP_HAS_LONG_DOUBLE
   basic_ostream& operator<<(long double __f);
+#endif
   basic_ostream& operator<<(const void* __p);
 
 #  if _LIBCPP_STD_VER >= 23
@@ -331,10 +333,12 @@ basic_ostream<_CharT, _Traits>& basic_ostream<_CharT, _Traits>::operator<<(doubl
   return __put_num(__n);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <class _CharT, class _Traits>
 basic_ostream<_CharT, _Traits>& basic_ostream<_CharT, _Traits>::operator<<(long double __n) {
   return __put_num(__n);
 }
+#endif
 
 template <class _CharT, class _Traits>
 basic_ostream<_CharT, _Traits>& basic_ostream<_CharT, _Traits>::operator<<(const void* __n) {

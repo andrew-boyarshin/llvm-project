@@ -17,7 +17,10 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 PREFIX="$1"
 RUNTIME_BUILD="$2"
 BUILD_TYPE="${BUILD_TYPE:-Debug}"
-TARGET=cbc_x86_64-unknown-linux-gnu
+TARGET=x86_64-unknown-linux-gnu
+# -Wno-cbc-unsupported: libc++/abi headers are -I not -isystem, so Sema
+# long-double / asm warnings would flood (and fail under -Werror).
+CBC_FLAGS="-fcbc -Wno-cbc-unsupported"
 
 CLANG="$PREFIX/bin/clang"
 CLANGXX="$PREFIX/bin/clang++"
@@ -40,6 +43,8 @@ cmake -G Ninja -S "$ROOT/runtimes" -B "$RUNTIME_BUILD" \
   -DCMAKE_C_COMPILER_TARGET="$TARGET" \
   -DCMAKE_CXX_COMPILER_TARGET="$TARGET" \
   -DCMAKE_ASM_COMPILER_TARGET="$TARGET" \
+  -DCMAKE_C_FLAGS="$CBC_FLAGS" \
+  -DCMAKE_CXX_FLAGS="$CBC_FLAGS" \
   -DCMAKE_AR="$LLVM_AR" \
   -DCMAKE_RANLIB="$LLVM_RANLIB" \
   -DCMAKE_NM="$LLVM_NM" \
@@ -47,6 +52,7 @@ cmake -G Ninja -S "$ROOT/runtimes" -B "$RUNTIME_BUILD" \
   -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi" \
   -DLLVM_DEFAULT_TARGET_TRIPLE="$TARGET" \
   -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
+  -DCOMPILER_RT_DEFAULT_TARGET_ARCH=cbc \
   -DCOMPILER_RT_BUILD_BUILTINS=ON \
   -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
   -DCOMPILER_RT_BUILD_XRAY=OFF \
@@ -88,6 +94,7 @@ cmake -G Ninja -S "$ROOT/runtimes" -B "$RUNTIME_BUILD" \
   -DLIBCXX_USE_COMPILER_RT=ON \
   -DLIBCXX_HAS_ATOMIC_LIB=OFF \
   -DLIBCXX_ENABLE_NEW_DELETE_DEFINITIONS=OFF \
+  -DLIBCXX_ENABLE_LONG_DOUBLE=OFF \
   -DLIBCXX_INSTALL_INCLUDE_DIR=lib/cbc/include/c++/v1 \
   -DLIBCXX_INSTALL_LIBRARY_DIR=lib/cbc/lib
 

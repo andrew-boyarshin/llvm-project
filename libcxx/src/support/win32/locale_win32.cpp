@@ -305,11 +305,13 @@ float __str_to_float_c_locale<float>(const char* nptr, char** endptr) {
   return std::strtof(nptr, endptr);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <>
 long double __str_to_float_c_locale<long double>(const char* nptr, char** endptr) {
   __locale_guard __current(__get_c_locale());
   return std::strtold(nptr, endptr);
 }
+#endif
 #endif
 
 //

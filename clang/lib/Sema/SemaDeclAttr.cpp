@@ -3745,6 +3745,8 @@ static void handleTargetAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
       S.checkTargetAttr(LiteralLoc, Str))
     return;
 
+  S.DiagnoseCBCTargetAttr(AL.getLoc());
+
   TargetAttr *NewAttr = ::new (S.Context) TargetAttr(S.Context, AL, Str);
   D->addAttr(NewAttr);
 }

@@ -1560,6 +1560,14 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
 
   // Get other target #defines.
   TI.getTargetDefines(LangOpts, Builder);
+
+  // CBC overlay macros on the host TargetInfo (-fcbc).
+  if (LangOpts.CBC) {
+    Builder.defineMacro("__CBC__");
+    Builder.defineMacro("__cbc__");
+    Builder.defineMacro("__CBC_ENGINE_ABI__");
+    Builder.defineMacro("__CBC_SHADOW_STACK__");
+  }
 }
 
 static void InitializePGOProfileMacros(const CodeGenOptions &CodeGenOpts,

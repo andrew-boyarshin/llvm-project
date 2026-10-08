@@ -4085,6 +4085,9 @@ ExprResult Sema::ActOnNumericConstant(const Token &Tok, Scope *UDLScope) {
 
     Res = BuildFloatingLiteral(*this, Literal, Ty, Tok.getLocation());
 
+    if (isCBCForbiddenLongDouble(Ty))
+      DiagnoseCBCLongDouble(Tok.getLocation());
+
     if (Ty == Context.DoubleTy) {
       if (getLangOpts().SinglePrecisionConstants) {
         if (Ty->castAs<BuiltinType>()->getKind() != BuiltinType::Float) {
@@ -17642,6 +17645,8 @@ ExprResult Sema::BuildVAArgExpr(SourceLocation BuiltinLoc,
   }
 
   QualType T = TInfo->getType().getNonLValueExprType(Context);
+  if (isCBCForbiddenLongDouble(T) || typeInvolvesCBCForbiddenLongDouble(T))
+    DiagnoseCBCLongDouble(BuiltinLoc);
   return new (Context) VAArgExpr(BuiltinLoc, E, TInfo, RPLoc, T, VAKind);
 }
 

@@ -12,6 +12,7 @@
 #include "Arch/Mips.h"
 #include "Arch/PPC.h"
 #include "Arch/RISCV.h"
+#include "CBC.h"
 #include "clang/Config/config.h"
 #include "clang/Driver/CommonArgs.h"
 #include "clang/Driver/Distro.h"
@@ -223,7 +224,17 @@ static StringRef getOSLibDir(const llvm::Triple &Triple, const ArgList &Args) {
 }
 
 Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
-    : Generic_ELF(D, Triple, Args) {
+    : Generic_ELF(D, Triple, Args),
+      CBCMode(Args.hasFlag(options::OPT_fcbc, options::OPT_fno_cbc, false)) {
+  if (CBCMode) {
+    if (Triple.getArch() != llvm::Triple::x86_64 || !Triple.isOSLinux()) {
+      D.Diag(diag::err_drv_cbc_unsupported_target) << Triple.str();
+      CBCMode = false;
+    }
+    if (Args.hasArg(options::OPT_fopenmp, options::OPT_fopenmp_EQ))
+      D.Diag(diag::err_drv_cbc_fopenmp);
+  }
+
   GCCInstallation.TripleToDebianMultiarch = [](const llvm::Triple &T) {
     StringRef TripleStr = T.str();
     StringRef DebianMultiarch =
@@ -391,7 +402,11 @@ ToolChain::CXXStdlibType Linux::GetDefaultCXXStdlibType() const {
 
 bool Linux::HasNativeLLVMSupport() const { return true; }
 
-Tool *Linux::buildLinker() const { return new tools::gnutools::Linker(*this); }
+Tool *Linux::buildLinker() const {
+  if (CBCMode)
+    return new tools::cbc::Linker(*this);
+  return new tools::gnutools::Linker(*this);
+}
 
 Tool *Linux::buildStaticLibTool() const {
   return new tools::gnutools::StaticLibTool(*this);
@@ -556,6 +571,15 @@ void Linux::addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                                   llvm::opt::ArgStringList &CC1Args,
                                   BoundArch BA,
                                   Action::OffloadKind DeviceOffloadKind) const {
+  if (CBCMode) {
+    CC1Args.push_back("-fcbc");
+    CC1Args.push_back("-femulated-tls");
+    CC1Args.push_back("-fno-common");
+    // Native shared libraries: dynsym APIs are opt-in (visibility("default")).
+    if (DriverArgs.hasArg(options::OPT_shared) &&
+        !DriverArgs.hasArg(options::OPT_fvisibility_EQ))
+      CC1Args.push_back("-fvisibility=hidden");
+  }
   llvm::Triple Triple(ComputeEffectiveClangTriple(DriverArgs));
   if (Triple.isAArch64() && Triple.getEnvironment() == llvm::Triple::PAuthTest)
     handlePAuthABI(getDriver(), DriverArgs, CC1Args);
@@ -766,6 +790,13 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   if (DriverArgs.hasArg(options::OPT_nostdinc))
     return;
 
+  // CBC empty-guard *intrin.h wrappers and floatn.h must win over system ones.
+  if (CBCMode && !DriverArgs.hasArg(options::OPT_nobuiltininc)) {
+    SmallString<256> Inc(D.Dir);
+    llvm::sys::path::append(Inc, "..", "lib", "cbc", "include");
+    addSystemInclude(DriverArgs, CC1Args, Inc);
+  }
+
   // Add 'include' in the resource directory, which is similar to
   // GCC_INCLUDE_DIR (private headers) in GCC. Note: the include directory
   // contains some files conflicting with system /usr/include. musl systems
@@ -946,8 +977,73 @@ void Linux::addSYCLIncludeArgs(const ArgList &DriverArgs,
 }
 
 bool Linux::isPIEDefault(const llvm::opt::ArgList &Args) const {
+  if (CBCMode)
+    return false;
   return CLANG_DEFAULT_PIE_ON_LINUX || getTriple().isAndroid() ||
          getTriple().isMusl() || getSanitizerArgs(Args).requiresPIE();
+}
+
+bool Linux::isPICDefault() const {
+  if (CBCMode)
+    return false;
+  return Generic_ELF::isPICDefault();
+}
+
+bool Linux::isPICDefaultForced() const {
+  if (CBCMode)
+    return false;
+  return Generic_ELF::isPICDefaultForced();
+}
+
+LTOKind Linux::getDefaultLTOMode() const {
+  if (CBCMode)
+    return LTOK_Full;
+  return ToolChain::getDefaultLTOMode();
+}
+
+LTOKind Linux::getLTOMode(const ArgList &Args,
+                          Action::OffloadKind Kind) const {
+  if (CBCMode) {
+    if (Args.hasArg(options::OPT_fno_lto)) {
+      getDriver().Diag(diag::err_drv_unsupported_opt)
+          << "-fno-lto (separate CBC code generation is not supported)";
+      return LTOK_Full;
+    }
+    if (!Args.hasArg(options::OPT_flto_EQ, options::OPT_fno_lto))
+      return LTOK_Full;
+  }
+  return ToolChain::getLTOMode(Args, Kind);
+}
+
+ToolChain::CXXStdlibType
+Linux::GetCXXStdlibType(const ArgList &Args) const {
+  if (CBCMode) {
+    if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
+      StringRef Name = A->getValue();
+      if (Name != "libc++") {
+        getDriver().Diag(diag::err_drv_invalid_stdlib_name)
+            << A->getAsString(Args);
+      }
+    }
+    return ToolChain::CST_Libcxx;
+  }
+  return ToolChain::GetCXXStdlibType(Args);
+}
+
+void Linux::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
+                                         ArgStringList &CC1Args) const {
+  if (CBCMode) {
+    if (DriverArgs.hasArg(options::OPT_nostdinc, options::OPT_nostdincxx))
+      return;
+    GetCXXStdlibType(DriverArgs);
+    SmallString<256> Inc(getDriver().Dir);
+    llvm::sys::path::append(Inc, "..", "lib", "cbc", "include");
+    llvm::sys::path::append(Inc, "c++", "v1");
+    CC1Args.push_back("-internal-isystem");
+    CC1Args.push_back(DriverArgs.MakeArgString(Inc));
+    return;
+  }
+  Generic_GCC::AddClangCXXStdlibIncludeArgs(DriverArgs, CC1Args);
 }
 
 bool Linux::IsAArch64OutlineAtomicsDefault(const ArgList &Args) const {
@@ -1049,6 +1145,8 @@ void Linux::addExtraOpts(llvm::opt::ArgStringList &CmdArgs) const {
 }
 
 const char *Linux::getDefaultLinker() const {
+  if (CBCMode)
+    return "ld.lld";
   if (getTriple().isAndroid())
     return "ld.lld";
   return Generic_ELF::getDefaultLinker();

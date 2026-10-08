@@ -80,8 +80,12 @@ void CodeGenTargetMachineImpl::initAsmInfo() {
 
   TmpAsmInfo->setFullRegisterNames(Options.MCOptions.PPCUseFullRegisterNames);
 
-  assert(TmpAsmInfo->getExceptionHandlingType() ==
-             getTargetTriple().getDefaultExceptionHandling() &&
+  // CBC hardcodes Wasm EH for the bytecode ABI even when the TM triple is a
+  // host triple (x86_64-*-linux-gnu under -fcbc). Skip the Triple agreement
+  // check for that registered target.
+  assert((getTarget().getName() == StringRef("cbc") ||
+          TmpAsmInfo->getExceptionHandlingType() ==
+              getTargetTriple().getDefaultExceptionHandling()) &&
          "MCAsmInfo and Triple disagree on default exception handling type");
 
   if (Options.ExceptionModel != ExceptionHandling::Default)

@@ -77,6 +77,7 @@
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/TargetParser/AArch64TargetParser.h"
+#include "llvm/TargetParser/CBCABI.h"
 #include "llvm/TargetParser/RISCVISAInfo.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/TargetParser/X86TargetParser.h"
@@ -126,9 +127,6 @@ createTargetCodeGenInfo(CodeGenModule &CGM) {
   switch (Triple.getArch()) {
   default:
     return createDefaultTargetCodeGenInfo(CGM);
-
-  case llvm::Triple::cbc:
-    return createCBCTargetCodeGenInfo(CGM);
 
   case llvm::Triple::m68k:
     return createM68kTargetCodeGenInfo(CGM);
@@ -1172,6 +1170,9 @@ static bool isStackProtectorOn(const LangOptions &LangOpts,
 
 std::optional<llvm::Attribute::AttrKind>
 CodeGenModule::StackProtectorAttribute(const Decl *D) const {
+  // CBC has no stack-protector lowering; omit ssp / sspstrong / sspreq.
+  if (LangOpts.CBC)
+    return std::nullopt;
   if (D && D->hasAttr<NoStackProtectorAttr>())
     ; // Do nothing.
   else if (D && D->hasAttr<StrictGuardStackCheckAttr>() &&
@@ -1438,6 +1439,13 @@ void CodeGenModule::Release() {
     // (and warn about it, too).
     getModule().addModuleFlag(llvm::Module::Warning, "Debug Info Version",
                               llvm::DEBUG_METADATA_VERSION);
+
+  // CBC safety rail: presence of !"CBC" marks bitcode compiled with -fcbc.
+  // ABI / host identity is the module target triple (checked by lld --cbc).
+  if (getTriple().isCBC() || getLangOpts().CBC) {
+    getModule().addModuleFlag(llvm::Module::Error, llvm::CBCModuleFlagKey,
+                              uint32_t(1));
+  }
 
   // We need to record the widths of enums and wchar_t, so that we can generate
   // the correct build attributes in the ARM backend. wchar_size is also used by

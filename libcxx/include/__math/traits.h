@@ -38,10 +38,12 @@ template <class = void>
   return __builtin_signbit(__x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <class = void>
 [[__nodiscard__]] inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool signbit(long double __x) _NOEXCEPT {
   return __builtin_signbit(__x);
 }
+#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 [[__nodiscard__]] inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool signbit(_A1 __x) _NOEXCEPT {
@@ -63,9 +65,11 @@ template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
   return __builtin_isfinite(__x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isfinite(long double __x) _NOEXCEPT {
   return __builtin_isfinite(__x);
 }
+#endif
 
 // isinf
 
@@ -87,9 +91,11 @@ _LIBCPP_PREFERRED_OVERLOAD
   return __builtin_isinf(__x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isinf(long double __x) _NOEXCEPT {
   return __builtin_isinf(__x);
 }
+#endif
 
 // isnan
 
@@ -111,9 +117,11 @@ _LIBCPP_PREFERRED_OVERLOAD
   return __builtin_isnan(__x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isnan(long double __x) _NOEXCEPT {
   return __builtin_isnan(__x);
 }
+#endif
 
 // isnormal
 
@@ -130,9 +138,11 @@ template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
   return __builtin_isnormal(__x);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isnormal(long double __x) _NOEXCEPT {
   return __builtin_isnormal(__x);
 }
+#endif
 
 // isgreater
 

@@ -648,7 +648,6 @@ createX86_64TargetCodeGenInfo(CodeGenModule &CGM, X86AVXABILevel AVXLevel);
 
 std::unique_ptr<ABIInfo> createX86_64SysVABIInfo(CodeGenTypes &CGT);
 
-std::unique_ptr<TargetCodeGenInfo> createCBCTargetCodeGenInfo(CodeGenModule &CGM);
 
 std::unique_ptr<TargetCodeGenInfo>
 createWinX86_64TargetCodeGenInfo(CodeGenModule &CGM, X86AVXABILevel AVXLevel);

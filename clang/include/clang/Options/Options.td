@@ -4217,6 +4217,14 @@ def fopenmp : Flag<["-"], "fopenmp">, Group<f_Group>,
 def fno_openmp : Flag<["-"], "fno-openmp">, Group<f_Group>,
   Visibility<[ClangOption, CC1Option, FlangOption, FC1Option]>,
   Flags<[NoArgumentUnused]>;
+def fcbc : Flag<["-"], "fcbc">, Group<f_Group>,
+  Visibility<[ClangOption, CC1Option]>,
+  HelpText<"Compile for the CBC bytecode runtime on the host triple "
+           "(x86_64-unknown-linux-gnu -fcbc). Implies bitcode -c and "
+           "ld.lld --cbc at link time.">;
+def fno_cbc : Flag<["-"], "fno-cbc">, Group<f_Group>,
+  Visibility<[ClangOption, CC1Option]>;
+
 class OpenMPVersionHelp<string program, string default> {
   string str = !strconcat(
     "Set OpenMP version (e.g. 45 for OpenMP 4.5, 51 for OpenMP 5.1). Default value is ",

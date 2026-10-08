@@ -20,6 +20,7 @@ add_llvm_target(CBCCodeGen
   CBCLowerGlobals.cpp
   CBCLowerSjLj.cpp
   CBCRegisterInfo.cpp
+  CBCRejectUnsupportedIR.cpp
   CBCSubtarget.cpp
   CBCSynthesizeEntry.cpp
   CBCTargetMachine.cpp

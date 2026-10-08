@@ -262,7 +262,9 @@ public:
   basic_istream& operator>>(unsigned long long& __n);
   basic_istream& operator>>(float& __f);
   basic_istream& operator>>(double& __f);
+#if _LIBCPP_HAS_LONG_DOUBLE
   basic_istream& operator>>(long double& __f);
+#endif
   basic_istream& operator>>(void*& __p);
 
   // 27.7.1.3 Unformatted input:
@@ -428,10 +430,12 @@ basic_istream<_CharT, _Traits>& basic_istream<_CharT, _Traits>::operator>>(doubl
   return std::__input_arithmetic<double>(*this, __n);
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 template <class _CharT, class _Traits>
 basic_istream<_CharT, _Traits>& basic_istream<_CharT, _Traits>::operator>>(long double& __n) {
   return std::__input_arithmetic<long double>(*this, __n);
 }
+#endif
 
 template <class _CharT, class _Traits>
 basic_istream<_CharT, _Traits>& basic_istream<_CharT, _Traits>::operator>>(bool& __n) {

@@ -470,51 +470,63 @@ inline namespace chrono_literals {
   return chrono::hours(static_cast<chrono::hours::rep>(__h));
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] _LIBCPP_HIDE_FROM_ABI constexpr chrono::duration<long double, ratio<3600, 1>>
 operator""h(long double __h) {
   return chrono::duration<long double, ratio<3600, 1>>(__h);
 }
+#endif
 
 [[__nodiscard__]] _LIBCPP_HIDE_FROM_ABI constexpr chrono::minutes operator""min(unsigned long long __m) {
   return chrono::minutes(static_cast<chrono::minutes::rep>(__m));
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] _LIBCPP_HIDE_FROM_ABI constexpr chrono::duration<long double, ratio<60, 1>>
 operator""min(long double __m) {
   return chrono::duration<long double, ratio<60, 1>>(__m);
 }
+#endif
 
 [[__nodiscard__]] _LIBCPP_HIDE_FROM_ABI constexpr chrono::seconds operator""s(unsigned long long __s) {
   return chrono::seconds(static_cast<chrono::seconds::rep>(__s));
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] _LIBCPP_HIDE_FROM_ABI constexpr chrono::duration<long double> operator""s(long double __s) {
   return chrono::duration<long double>(__s);
 }
+#endif
 
 [[__nodiscard__]] _LIBCPP_HIDE_FROM_ABI constexpr chrono::milliseconds operator""ms(unsigned long long __ms) {
   return chrono::milliseconds(static_cast<chrono::milliseconds::rep>(__ms));
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] _LIBCPP_HIDE_FROM_ABI constexpr chrono::duration<long double, milli> operator""ms(long double __ms) {
   return chrono::duration<long double, milli>(__ms);
 }
+#endif
 
 [[__nodiscard__]] _LIBCPP_HIDE_FROM_ABI constexpr chrono::microseconds operator""us(unsigned long long __us) {
   return chrono::microseconds(static_cast<chrono::microseconds::rep>(__us));
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] _LIBCPP_HIDE_FROM_ABI constexpr chrono::duration<long double, micro> operator""us(long double __us) {
   return chrono::duration<long double, micro>(__us);
 }
+#endif
 
 [[__nodiscard__]] _LIBCPP_HIDE_FROM_ABI constexpr chrono::nanoseconds operator""ns(unsigned long long __ns) {
   return chrono::nanoseconds(static_cast<chrono::nanoseconds::rep>(__ns));
 }
 
+#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] _LIBCPP_HIDE_FROM_ABI constexpr chrono::duration<long double, nano> operator""ns(long double __ns) {
   return chrono::duration<long double, nano>(__ns);
 }
+#endif
 
 } // namespace chrono_literals
 } // namespace literals

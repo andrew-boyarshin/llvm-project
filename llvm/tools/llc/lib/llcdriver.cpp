@@ -56,6 +56,7 @@
 #include "llvm/Support/WithColor.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/CBCABI.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
@@ -604,8 +605,21 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
 
     // Get the target specific parser.
     std::string Error;
-    TheTarget =
-        TargetRegistry::lookupTarget(codegen::getMArch(), TheTriple, Error);
+    // -march=cbc: find CBC by name without rewriting the triple to Arch::cbc
+    // (CBC TM uses the host triple for data layout).
+    // Note: local variable `Target` (TargetMachine) shadows llvm::Target.
+    if (codegen::getMArch() == "cbc") {
+      for (const class Target &T : TargetRegistry::targets())
+        if (StringRef(T.getName()) == "cbc") {
+          TheTarget = &T;
+          break;
+        }
+      if (!TheTarget)
+        Error = "invalid target 'cbc'.";
+    } else {
+      TheTarget =
+          TargetRegistry::lookupTarget(codegen::getMArch(), TheTriple, Error);
+    }
     if (!TheTarget) {
       WithColor::error(errs(), argv[0]) << Error << "\n";
       return 1;
@@ -641,8 +655,21 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
       TheTriple.setTriple(sys::getDefaultTargetTriple());
 
     std::string Error;
-    TheTarget =
-        TargetRegistry::lookupTarget(codegen::getMArch(), TheTriple, Error);
+    // -march=cbc: find CBC by name; keep the module's host triple so
+    // computeDataLayout stays the host string (f80:128, p270, …).
+    // Note: local variable `Target` (TargetMachine) shadows llvm::Target.
+    if (codegen::getMArch() == "cbc") {
+      for (const class Target &T : TargetRegistry::targets())
+        if (StringRef(T.getName()) == "cbc") {
+          TheTarget = &T;
+          break;
+        }
+      if (!TheTarget)
+        Error = "invalid target 'cbc'.";
+    } else {
+      TheTarget =
+          TargetRegistry::lookupTarget(codegen::getMArch(), TheTriple, Error);
+    }
     if (!TheTarget) {
       WithColor::error(errs(), argv[0]) << Error << "\n";
       exit(1);
@@ -674,6 +701,14 @@ static int compileModule(char **argv, SmallVectorImpl<PassPlugin> &PluginList,
   }
   if (!M) {
     Err.print(argv[0], WithColor::error(errs(), argv[0]));
+    return 1;
+  }
+
+  // CBC-flagged bitcode must use -march=cbc so we construct CBCTargetMachine
+  // by name rather than native-codegen as X86/AArch64.
+  if (M->getModuleFlag(CBCModuleFlagKey) && codegen::getMArch() != "cbc") {
+    WithColor::error(errs(), argv[0])
+        << "CBC bitcode cannot be codegen'd without -march=cbc\n";
     return 1;
   }
 

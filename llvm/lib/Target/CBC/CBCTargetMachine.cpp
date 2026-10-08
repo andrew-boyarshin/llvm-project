@@ -15,6 +15,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeCBCTarget() {
   RegisterTargetMachine<CBCTargetMachine> X(getTheCBCTarget());
   PassRegistry &PR = *PassRegistry::getPassRegistry();
   initializeCBCDAGToDAGISelLegacyPass(PR);
+  initializeCBCRejectUnsupportedIRLegacyPass(PR);
   initializeCBCLowerGlobalsLegacyPass(PR);
   initializeCBCSynthesizeEntryLegacyPass(PR);
   initializeCBCLowerSjLjLegacyPass(PR);
@@ -25,14 +26,30 @@ static Reloc::Model getReloc(std::optional<Reloc::Model> RM) {
   return RM.value_or(Reloc::Static);
 }
 
+static bool isSupportedCBCTriple(const Triple &TT) {
+  // Host-triple bitcode (-fcbc) or legacy cbc_x86_64-* private triples.
+  return TT.isCBCHostX86_64() || TT.getArch() == Triple::x86_64;
+}
+
+/// Keep the host arch/OS/ABI for data layout, but force CBC object format so
+/// AsmPrinter uses CBCStreamer (not ELF) under -fcbc host triples.
+static Triple makeCBCMachineTriple(const Triple &TT) {
+  if (TT.getObjectFormat() == Triple::CBC)
+    return TT;
+  return Triple(TT.getArch(), TT.getSubArch(), TT.getVendor(), TT.getOS(),
+                TT.getEnvironment(), Triple::CBC);
+}
+
 CBCTargetMachine::CBCTargetMachine(
     const Target &T, const Triple &TT, StringRef CPU, StringRef FS,
     const TargetOptions &Options, std::optional<Reloc::Model> RM,
     std::optional<CodeModel::Model> CM, CodeGenOptLevel OL, bool JIT)
-    : CodeGenTargetMachineImpl(T, TT, CPU, FS, Options, getReloc(RM),
+    : CodeGenTargetMachineImpl(T, makeCBCMachineTriple(TT), CPU, FS, Options,
+                               getReloc(RM),
                                getEffectiveCodeModel(CM, CodeModel::Small), OL),
-      Subtarget(TT, CPU, FS, *this), TLOF(new CBCTargetObjectFile()) {
-  if (!TT.isCBCHostX86_64())
+      Subtarget(makeCBCMachineTriple(TT), CPU, FS, *this),
+      TLOF(new CBCTargetObjectFile()) {
+  if (!isSupportedCBCTriple(TT))
     report_fatal_error(
         "the AArch64 flavour of the CBC target is not implemented yet");
   initAsmInfo();
@@ -50,6 +67,8 @@ public:
   CBCPassConfig(CBCTargetMachine &TM, PassManagerBase &PM)
       : TargetPassConfig(TM, PM) {}
   void addIRPasses() override {
+    // Before LowerGlobals so fp80 globals get a clean error, not image layout.
+    addPass(createCBCRejectUnsupportedIRPass());
     addPass(createExpandVariadicsPass(ExpandVariadicsMode::Lowering));
     addPass(createIndirectBrExpandPass());
     addPass(createCBCLowerEHPass());

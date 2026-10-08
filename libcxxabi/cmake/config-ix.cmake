@@ -4,7 +4,8 @@ include(CheckCCompilerFlag)
 include(CheckCXXCompilerFlag)
 include(CheckCSourceCompiles)
 
-if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc")
+if (CMAKE_CXX_COMPILER_TARGET MATCHES "^cbc" OR
+    CMAKE_CXX_FLAGS MATCHES "(^| )-fcbc( |$)")
   # Do not probe host libgcc / libgcc_s. ld.lld --cbc supplies compiler-rt and the
   # crt unwind entry points.
   set(LIBCXXABI_HAS_C_LIB OFF)

@@ -582,7 +582,21 @@ void EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
   // Create the TargetMachine for generating code.
   std::string Error;
   const llvm::Triple &Triple = TheModule->getTargetTriple();
-  const llvm::Target *TheTarget = TargetRegistry::lookupTarget(Triple, Error);
+  // -fcbc: always use CBC TM (for TTI at -c and any codegen). Do not look up
+  // the host arch TM — that would plant X86 vectors / run X86 ISel on -S.
+  // Find CBC by name without rewriting the host Triple to Arch::cbc.
+  const llvm::Target *TheTarget = nullptr;
+  if (LangOpts.CBC) {
+    for (const Target &T : TargetRegistry::targets())
+      if (StringRef(T.getName()) == "cbc") {
+        TheTarget = &T;
+        break;
+      }
+    if (!TheTarget)
+      Error = "CBC target is not registered";
+  } else {
+    TheTarget = TargetRegistry::lookupTarget(Triple, Error);
+  }
   if (!TheTarget) {
     if (MustCreateTM)
       Diags.Report(diag::err_fe_unable_to_create_target) << Error;
@@ -601,8 +615,12 @@ void EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
   llvm::TargetOptions Options;
   if (!initTargetOptions(CI, Diags, Options))
     return;
-  TM.reset(TheTarget->createTargetMachine(Triple, TargetOpts.CPU, FeaturesStr,
-                                          Options, RM, CM, OptLevel));
+  // CBC has no host CPU/feature catalogue; empty CPU avoids "x86-64 is not a
+  // recognized processor" spam from the CBC Subtarget.
+  StringRef CPU = LangOpts.CBC ? StringRef() : StringRef(TargetOpts.CPU);
+  StringRef Features = LangOpts.CBC ? StringRef() : StringRef(FeaturesStr);
+  TM.reset(TheTarget->createTargetMachine(Triple, CPU, Features, Options, RM,
+                                          CM, OptLevel));
   if (TM)
     TM->setLargeDataThreshold(CodeGenOpts.LargeDataThreshold);
 }
