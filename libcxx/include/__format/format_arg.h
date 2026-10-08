@@ -134,11 +134,7 @@ _LIBCPP_HIDE_FROM_ABI decltype(auto) __visit_format_arg(_Visitor&& __vis, basic_
   case __format::__arg_t::__double:
     return std::invoke(std::forward<_Visitor>(__vis), __arg.__value_.__double_);
   case __format::__arg_t::__long_double:
-#if _LIBCPP_HAS_LONG_DOUBLE
     return std::invoke(std::forward<_Visitor>(__vis), __arg.__value_.__long_double_);
-#else
-    __libcpp_unreachable();
-#endif
   case __format::__arg_t::__const_char_type_ptr:
     return std::invoke(std::forward<_Visitor>(__vis), __arg.__value_.__const_char_type_ptr_);
   case __format::__arg_t::__string_view:
@@ -189,11 +185,7 @@ _LIBCPP_HIDE_FROM_ABI _Rp __visit_format_arg(_Visitor&& __vis, basic_format_arg<
   case __format::__arg_t::__double:
     return std::invoke_r<_Rp>(std::forward<_Visitor>(__vis), __arg.__value_.__double_);
   case __format::__arg_t::__long_double:
-#if _LIBCPP_HAS_LONG_DOUBLE
     return std::invoke_r<_Rp>(std::forward<_Visitor>(__vis), __arg.__value_.__long_double_);
-#else
-    __libcpp_unreachable();
-#endif
   case __format::__arg_t::__const_char_type_ptr:
     return std::invoke_r<_Rp>(std::forward<_Visitor>(__vis), __arg.__value_.__const_char_type_ptr_);
   case __format::__arg_t::__string_view:
@@ -276,9 +268,7 @@ public:
 #  endif
   _LIBCPP_HIDE_FROM_ABI __basic_format_arg_value(float __value) noexcept : __float_(__value) {}
   _LIBCPP_HIDE_FROM_ABI __basic_format_arg_value(double __value) noexcept : __double_(__value) {}
-#if _LIBCPP_HAS_LONG_DOUBLE
   _LIBCPP_HIDE_FROM_ABI __basic_format_arg_value(long double __value) noexcept : __long_double_(__value) {}
-#endif
   _LIBCPP_HIDE_FROM_ABI __basic_format_arg_value(const _CharT* __value) noexcept : __const_char_type_ptr_(__value) {}
   _LIBCPP_HIDE_FROM_ABI __basic_format_arg_value(basic_string_view<_CharT> __value) noexcept
       : __string_view_(__value) {}

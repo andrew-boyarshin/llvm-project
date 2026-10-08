@@ -2625,29 +2625,38 @@ public:
 
   void printLeft(OutputBuffer &OB) const override {
     const size_t N = FloatData<Float>::mangled_size;
-    if (Contents.size() >= N) {
-      union {
-        Float value;
-        char buf[sizeof(Float)];
-      };
-      const char *t = Contents.data();
-      const char *last = t + N;
-      char *e = buf;
-      for (; t != last; ++t, ++e) {
-        unsigned d1 = isdigit(*t) ? static_cast<unsigned>(*t - '0')
-                                  : static_cast<unsigned>(*t - 'a' + 10);
-        ++t;
-        unsigned d0 = isdigit(*t) ? static_cast<unsigned>(*t - '0')
-                                  : static_cast<unsigned>(*t - 'a' + 10);
-        *e = static_cast<char>((d1 << 4) + d0);
-      }
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-      std::reverse(buf, e);
-#endif
-      char num[FloatData<Float>::max_demangled_size] = {0};
-      int n = snprintf(num, sizeof(num), FloatData<Float>::spec, value);
-      OB += std::string_view(num, n);
+    if (Contents.size() < N)
+      return;
+#if defined(__CBC__) && defined(__LDBL_MANT_DIG__) &&                          \
+    defined(__DBL_MANT_DIG__) && (__LDBL_MANT_DIG__ != __DBL_MANT_DIG__)
+    // CBC forbids operating on host extended long double (x86_fp80 / fp128).
+    // Emit the mangled hex payload instead of loading Float + snprintf %LaL.
+    if (KindForClass == Node::KLongDoubleLiteral) {
+      OB += Contents.substr(0, N);
+      return;
     }
+#endif
+    union {
+      Float value;
+      char buf[sizeof(Float)];
+    };
+    const char *t = Contents.data();
+    const char *last = t + N;
+    char *e = buf;
+    for (; t != last; ++t, ++e) {
+      unsigned d1 = isdigit(*t) ? static_cast<unsigned>(*t - '0')
+                                : static_cast<unsigned>(*t - 'a' + 10);
+      ++t;
+      unsigned d0 = isdigit(*t) ? static_cast<unsigned>(*t - '0')
+                                : static_cast<unsigned>(*t - 'a' + 10);
+      *e = static_cast<char>((d1 << 4) + d0);
+    }
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    std::reverse(buf, e);
+#endif
+    char num[FloatData<Float>::max_demangled_size] = {0};
+    int n = snprintf(num, sizeof(num), FloatData<Float>::spec, value);
+    OB += std::string_view(num, n);
   }
 };
 

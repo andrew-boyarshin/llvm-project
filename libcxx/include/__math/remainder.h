@@ -32,11 +32,9 @@ _LIBCPP_HIDE_FROM_ABI double remainder(double __x, double __y) _NOEXCEPT {
   return __builtin_remainder(__x, __y);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double remainder(long double __x, long double __y) _NOEXCEPT {
   return __builtin_remainderl(__x, __y);
 }
-#endif
 
 template <class _A1, class _A2, __enable_if_t<is_arithmetic<_A1>::value && is_arithmetic<_A2>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI __promote_t<_A1, _A2> remainder(_A1 __x, _A2 __y) _NOEXCEPT {
@@ -56,11 +54,9 @@ _LIBCPP_HIDE_FROM_ABI double remquo(double __x, double __y, int* __z) _NOEXCEPT 
   return __builtin_remquo(__x, __y, __z);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double remquo(long double __x, long double __y, int* __z) _NOEXCEPT {
   return __builtin_remquol(__x, __y, __z);
 }
-#endif
 
 template <class _A1, class _A2, __enable_if_t<is_arithmetic<_A1>::value && is_arithmetic<_A2>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI __promote_t<_A1, _A2> remquo(_A1 __x, _A2 __y, int* __z) _NOEXCEPT {

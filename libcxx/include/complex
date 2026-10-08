@@ -969,12 +969,10 @@ template <class _Tp>
   return std::atan2(__c.imag(), __c.real());
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 template <class _Tp, __enable_if_t<is_same<_Tp, long double>::value, int> = 0>
 [[__nodiscard__]] inline _LIBCPP_HIDE_FROM_ABI long double arg(_Tp __re) {
   return std::atan2l(0.L, __re);
 }
-#endif
 
 template <class _Tp, __enable_if_t<is_integral<_Tp>::value || is_same<_Tp, double>::value, int> = 0>
 [[__nodiscard__]] inline _LIBCPP_HIDE_FROM_ABI double arg(_Tp __re) {
@@ -1473,29 +1471,23 @@ template <size_t _Ip, class _Xp>
 // Literal suffix for complex number literals [complex.literals]
 inline namespace literals {
 inline namespace complex_literals {
-#if _LIBCPP_HAS_LONG_DOUBLE
 _LIBCPP_HIDE_FROM_ABI inline constexpr complex<long double> operator""il(long double __im) { return {0.0l, __im}; }
 
 _LIBCPP_HIDE_FROM_ABI inline constexpr complex<long double> operator""il(unsigned long long __im) {
   return {0.0l, static_cast<long double>(__im)};
 }
-#endif
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 _LIBCPP_HIDE_FROM_ABI inline constexpr complex<double> operator""i(long double __im) {
   return {0.0, static_cast<double>(__im)};
 }
-#endif
 
 _LIBCPP_HIDE_FROM_ABI inline constexpr complex<double> operator""i(unsigned long long __im) {
   return {0.0, static_cast<double>(__im)};
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 _LIBCPP_HIDE_FROM_ABI inline constexpr complex<float> operator""if(long double __im) {
   return {0.0f, static_cast<float>(__im)};
 }
-#endif
 
 _LIBCPP_HIDE_FROM_ABI inline constexpr complex<float> operator""if(unsigned long long __im) {
   return {0.0f, static_cast<float>(__im)};

@@ -773,20 +773,16 @@ template <__fmt_char_type _CharT>
 struct formatter<float, _CharT> : public __formatter_floating_point<_CharT> {};
 template <__fmt_char_type _CharT>
 struct formatter<double, _CharT> : public __formatter_floating_point<_CharT> {};
-#if _LIBCPP_HAS_LONG_DOUBLE
 template <__fmt_char_type _CharT>
 struct formatter<long double, _CharT> : public __formatter_floating_point<_CharT> {};
-#endif
 
 #  if _LIBCPP_STD_VER >= 23
 template <>
 inline constexpr bool enable_nonlocking_formatter_optimization<float> = true;
 template <>
 inline constexpr bool enable_nonlocking_formatter_optimization<double> = true;
-#if _LIBCPP_HAS_LONG_DOUBLE
 template <>
 inline constexpr bool enable_nonlocking_formatter_optimization<long double> = true;
-#endif
 #  endif // _LIBCPP_STD_VER >= 23
 #endif   // _LIBCPP_STD_VER >= 20
 

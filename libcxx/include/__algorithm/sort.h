@@ -855,10 +855,8 @@ extern template _LIBCPP_EXPORTED_FROM_ABI void __sort<__less<unsigned long long>
     unsigned long long*, unsigned long long*, __less<unsigned long long>&);
 extern template _LIBCPP_EXPORTED_FROM_ABI void __sort<__less<float>&, float*>(float*, float*, __less<float>&);
 extern template _LIBCPP_EXPORTED_FROM_ABI void __sort<__less<double>&, double*>(double*, double*, __less<double>&);
-#if _LIBCPP_HAS_LONG_DOUBLE
 extern template _LIBCPP_EXPORTED_FROM_ABI void
 __sort<__less<long double>&, long double*>(long double*, long double*, __less<long double>&);
-#endif
 _LIBCPP_END_EXPLICIT_ABI_ANNOTATIONS
 
 template <class _AlgPolicy, class _RandomAccessIterator, class _Comp>
@@ -898,11 +896,8 @@ using __sort_is_specialized_in_library _LIBCPP_NODEBUG = __is_any_of<
     long long,
     unsigned long long,
     float,
-    double
-#if _LIBCPP_HAS_LONG_DOUBLE
-    ,
+    double,
     long double
-#endif
     >;
 
 template <class _AlgPolicy, class _Type, __enable_if_t<__sort_is_specialized_in_library<_Type>::value, int> = 0>

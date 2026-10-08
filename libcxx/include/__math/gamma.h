@@ -30,9 +30,7 @@ _LIBCPP_HIDE_FROM_ABI double lgamma(double __x) _NOEXCEPT {
   return __builtin_lgamma(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double lgamma(long double __x) _NOEXCEPT { return __builtin_lgammal(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double lgamma(_A1 __x) _NOEXCEPT {
@@ -50,9 +48,7 @@ _LIBCPP_HIDE_FROM_ABI double tgamma(double __x) _NOEXCEPT {
   return __builtin_tgamma(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double tgamma(long double __x) _NOEXCEPT { return __builtin_tgammal(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double tgamma(_A1 __x) _NOEXCEPT {

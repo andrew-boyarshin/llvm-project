@@ -66,15 +66,11 @@ inline _LIBCPP_HIDE_FROM_ABI float hermite(unsigned __n, float __x) {
   return static_cast<float>(std::hermite(__n, static_cast<double>(__x)));
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double hermite(unsigned __n, long double __x) { return std::__hermite(__n, __x); }
-#endif
 
 inline _LIBCPP_HIDE_FROM_ABI float hermitef(unsigned __n, float __x) { return std::hermite(__n, __x); }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double hermitel(unsigned __n, long double __x) { return std::hermite(__n, __x); }
-#endif
 
 template <class _Integer, std::enable_if_t<std::is_integral_v<_Integer>, int> = 0>
 _LIBCPP_HIDE_FROM_ABI double hermite(unsigned __n, _Integer __x) {

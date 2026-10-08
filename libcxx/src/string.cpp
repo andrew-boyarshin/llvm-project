@@ -18,6 +18,11 @@
 #  include <cwchar>
 #endif
 
+// Src-only gate from LIBCXX_ENABLE_LONG_DOUBLE; default ON when unset.
+#ifndef _LIBCPP_HAS_LONG_DOUBLE
+#  define _LIBCPP_HAS_LONG_DOUBLE 1
+#endif
+
 _LIBCPP_BEGIN_NAMESPACE_STD
 _LIBCPP_BEGIN_EXPLICIT_ABI_ANNOTATIONS
 

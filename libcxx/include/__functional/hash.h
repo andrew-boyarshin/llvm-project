@@ -392,7 +392,6 @@ struct __hash_impl<_Tp, __enable_if_t<is_floating_point<_Tp>::value && __is_unqu
   }
 };
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 template <>
 struct __hash_impl<long double> : __scalar_hash<long double> {
   _LIBCPP_HIDE_FROM_ABI size_t operator()(long double __v) const _NOEXCEPT {
@@ -434,7 +433,6 @@ struct __hash_impl<long double> : __scalar_hash<long double> {
 #endif
   }
 };
-#endif
 
 template <class _Tp>
 struct hash : public __hash_impl<_Tp> {};

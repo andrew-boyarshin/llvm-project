@@ -30,9 +30,7 @@ _LIBCPP_HIDE_FROM_ABI double sqrt(double __x) _NOEXCEPT {
   return __builtin_sqrt(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double sqrt(long double __x) _NOEXCEPT { return __builtin_sqrtl(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double sqrt(_A1 __x) _NOEXCEPT {
@@ -48,11 +46,9 @@ template <class = int>
   return __builtin_cbrt(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 [[__nodiscard__]] inline _LIBCPP_HIDE_FROM_ABI long double cbrt(long double __x) _NOEXCEPT {
   return __builtin_cbrtl(__x);
 }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 [[__nodiscard__]] inline _LIBCPP_HIDE_FROM_ABI double cbrt(_A1 __x) _NOEXCEPT {

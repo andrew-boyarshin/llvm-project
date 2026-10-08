@@ -231,11 +231,7 @@ _LIBCPP_HIDE_FROM_ABI constexpr void __compile_time_visit_format_arg(
   case __arg_t::__double:
     return __format::__compile_time_validate_argument<_CharT, double, true>(__parse_ctx, __ctx);
   case __arg_t::__long_double:
-#if _LIBCPP_HAS_LONG_DOUBLE
     return __format::__compile_time_validate_argument<_CharT, long double, true>(__parse_ctx, __ctx);
-#else
-    std::__throw_format_error("Invalid argument");
-#endif
   case __arg_t::__const_char_type_ptr:
     return __format::__compile_time_validate_argument<_CharT, const _CharT*, true>(__parse_ctx, __ctx);
   case __arg_t::__string_view:

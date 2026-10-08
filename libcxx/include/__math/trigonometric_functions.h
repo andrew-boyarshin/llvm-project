@@ -30,9 +30,7 @@ _LIBCPP_HIDE_FROM_ABI double cos(double __x) _NOEXCEPT {
   return __builtin_cos(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double cos(long double __x) _NOEXCEPT { return __builtin_cosl(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double cos(_A1 __x) _NOEXCEPT {
@@ -48,9 +46,7 @@ _LIBCPP_HIDE_FROM_ABI double sin(double __x) _NOEXCEPT {
   return __builtin_sin(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double sin(long double __x) _NOEXCEPT { return __builtin_sinl(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double sin(_A1 __x) _NOEXCEPT {
@@ -66,9 +62,7 @@ _LIBCPP_HIDE_FROM_ABI double tan(double __x) _NOEXCEPT {
   return __builtin_tan(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double tan(long double __x) _NOEXCEPT { return __builtin_tanl(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double tan(_A1 __x) _NOEXCEPT {

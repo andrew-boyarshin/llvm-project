@@ -30,9 +30,7 @@ _LIBCPP_HIDE_FROM_ABI double log(double __x) _NOEXCEPT {
   return __builtin_log(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double log(long double __x) _NOEXCEPT { return __builtin_logl(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double log(_A1 __x) _NOEXCEPT {
@@ -48,9 +46,7 @@ _LIBCPP_HIDE_FROM_ABI double log10(double __x) _NOEXCEPT {
   return __builtin_log10(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double log10(long double __x) _NOEXCEPT { return __builtin_log10l(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double log10(_A1 __x) _NOEXCEPT {
@@ -66,9 +62,7 @@ _LIBCPP_HIDE_FROM_ABI int ilogb(double __x) _NOEXCEPT {
   return __builtin_ilogb(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI int ilogb(long double __x) _NOEXCEPT { return __builtin_ilogbl(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI int ilogb(_A1 __x) _NOEXCEPT {
@@ -84,9 +78,7 @@ _LIBCPP_HIDE_FROM_ABI double log1p(double __x) _NOEXCEPT {
   return __builtin_log1p(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double log1p(long double __x) _NOEXCEPT { return __builtin_log1pl(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double log1p(_A1 __x) _NOEXCEPT {
@@ -102,9 +94,7 @@ _LIBCPP_HIDE_FROM_ABI double log2(double __x) _NOEXCEPT {
   return __builtin_log2(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double log2(long double __x) _NOEXCEPT { return __builtin_log2l(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double log2(_A1 __x) _NOEXCEPT {
@@ -120,9 +110,7 @@ _LIBCPP_HIDE_FROM_ABI double logb(double __x) _NOEXCEPT {
   return __builtin_logb(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double logb(long double __x) _NOEXCEPT { return __builtin_logbl(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double logb(_A1 __x) _NOEXCEPT {

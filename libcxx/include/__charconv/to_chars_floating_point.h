@@ -29,10 +29,8 @@ to_chars(char* __first, char* __last, float __value);
 _LIBCPP_AVAILABILITY_TO_CHARS_FLOATING_POINT _LIBCPP_EXPORTED_FROM_ABI to_chars_result
 to_chars(char* __first, char* __last, double __value);
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 _LIBCPP_AVAILABILITY_TO_CHARS_FLOATING_POINT _LIBCPP_EXPORTED_FROM_ABI to_chars_result
 to_chars(char* __first, char* __last, long double __value);
-#endif
 
 _LIBCPP_AVAILABILITY_TO_CHARS_FLOATING_POINT _LIBCPP_EXPORTED_FROM_ABI to_chars_result
 to_chars(char* __first, char* __last, float __value, chars_format __fmt);
@@ -40,10 +38,8 @@ to_chars(char* __first, char* __last, float __value, chars_format __fmt);
 _LIBCPP_AVAILABILITY_TO_CHARS_FLOATING_POINT _LIBCPP_EXPORTED_FROM_ABI to_chars_result
 to_chars(char* __first, char* __last, double __value, chars_format __fmt);
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 _LIBCPP_AVAILABILITY_TO_CHARS_FLOATING_POINT _LIBCPP_EXPORTED_FROM_ABI to_chars_result
 to_chars(char* __first, char* __last, long double __value, chars_format __fmt);
-#endif
 
 _LIBCPP_AVAILABILITY_TO_CHARS_FLOATING_POINT _LIBCPP_EXPORTED_FROM_ABI to_chars_result
 to_chars(char* __first, char* __last, float __value, chars_format __fmt, int __precision);
@@ -51,10 +47,8 @@ to_chars(char* __first, char* __last, float __value, chars_format __fmt, int __p
 _LIBCPP_AVAILABILITY_TO_CHARS_FLOATING_POINT _LIBCPP_EXPORTED_FROM_ABI to_chars_result
 to_chars(char* __first, char* __last, double __value, chars_format __fmt, int __precision);
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 _LIBCPP_AVAILABILITY_TO_CHARS_FLOATING_POINT _LIBCPP_EXPORTED_FROM_ABI to_chars_result
 to_chars(char* __first, char* __last, long double __value, chars_format __fmt, int __precision);
-#endif
 #endif // _LIBCPP_STD_VER >= 17
 
 _LIBCPP_END_EXPLICIT_ABI_ANNOTATIONS

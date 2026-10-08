@@ -33,9 +33,7 @@ _LIBCPP_HIDE_FROM_ABI double acos(double __x) _NOEXCEPT {
   return __builtin_acos(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double acos(long double __x) _NOEXCEPT { return __builtin_acosl(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double acos(_A1 __x) _NOEXCEPT {
@@ -51,9 +49,7 @@ _LIBCPP_HIDE_FROM_ABI double asin(double __x) _NOEXCEPT {
   return __builtin_asin(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double asin(long double __x) _NOEXCEPT { return __builtin_asinl(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double asin(_A1 __x) _NOEXCEPT {
@@ -69,9 +65,7 @@ _LIBCPP_HIDE_FROM_ABI double atan(double __x) _NOEXCEPT {
   return __builtin_atan(__x);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double atan(long double __x) _NOEXCEPT { return __builtin_atanl(__x); }
-#endif
 
 template <class _A1, __enable_if_t<is_integral<_A1>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI double atan(_A1 __x) _NOEXCEPT {
@@ -87,11 +81,9 @@ _LIBCPP_HIDE_FROM_ABI double atan2(double __x, double __y) _NOEXCEPT {
   return __builtin_atan2(__x, __y);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 inline _LIBCPP_HIDE_FROM_ABI long double atan2(long double __y, long double __x) _NOEXCEPT {
   return __builtin_atan2l(__y, __x);
 }
-#endif
 
 template <class _A1, class _A2, __enable_if_t<is_arithmetic<_A1>::value && is_arithmetic<_A2>::value, int> = 0>
 inline _LIBCPP_HIDE_FROM_ABI __promote_t<_A1, _A2> atan2(_A1 __y, _A2 __x) _NOEXCEPT {

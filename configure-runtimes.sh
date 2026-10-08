@@ -97,6 +97,8 @@ cmake -G Ninja -S "$ROOT/runtimes" -B "$RUNTIME_BUILD" \
   -DLIBCXX_ENABLE_LONG_DOUBLE=OFF \
   -DLIBCXX_INSTALL_INCLUDE_DIR=lib/cbc/include/c++/v1 \
   -DLIBCXX_INSTALL_LIBRARY_DIR=lib/cbc/lib
+# LIBCXX_ENABLE_LONG_DOUBLE=OFF: omit fp80 operating symbols from the archive;
+# headers still declare them (no longer a __config_site feature).
 
 echo "configured $RUNTIME_BUILD"
 echo "next: ./build.sh"

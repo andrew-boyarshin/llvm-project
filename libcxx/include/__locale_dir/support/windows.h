@@ -184,20 +184,16 @@ inline _LIBCPP_HIDE_FROM_ABI float __str_to_float_c_locale<float>(const char* __
   return ::_strtof_l(__nptr, __endptr, __get_c_locale());
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 template <>
 inline _LIBCPP_HIDE_FROM_ABI long double __str_to_float_c_locale<long double>(const char* __nptr, char** __endptr) {
   return ::_strtold_l(__nptr, __endptr, __get_c_locale());
 }
-#endif
 #else
 template <>
 _LIBCPP_EXPORTED_FROM_ABI float __str_to_float_c_locale<float>(const char*, char**);
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 template <>
 _LIBCPP_EXPORTED_FROM_ABI long double __str_to_float_c_locale<long double>(const char*, char**);
-#endif
 #endif
 
 template <>

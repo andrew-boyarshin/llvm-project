@@ -237,7 +237,7 @@ public:
 
   _LIBCPP_HIDE_FROM_ABI explicit money_get(size_t __refs = 0) : locale::facet(__refs) {}
 
-#if _LIBCPP_HAS_LONG_DOUBLE
+#ifndef __CBC__
   _LIBCPP_HIDE_FROM_ABI iter_type
   get(iter_type __b, iter_type __e, bool __intl, ios_base& __iob, ios_base::iostate& __err, long double& __v) const {
     return do_get(__b, __e, __intl, __iob, __err, __v);
@@ -254,7 +254,7 @@ public:
 protected:
   _LIBCPP_HIDE_FROM_ABI_VIRTUAL ~money_get() override {}
 
-#if _LIBCPP_HAS_LONG_DOUBLE
+#ifndef __CBC__
   virtual iter_type
   do_get(iter_type __b, iter_type __e, bool __intl, ios_base& __iob, ios_base::iostate& __err, long double& __v) const;
 #endif
@@ -475,7 +475,7 @@ bool money_get<_CharT, _InputIterator>::__do_get(
   return true;
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
+#ifndef __CBC__
 template <class _CharT, class _InputIterator>
 _InputIterator money_get<_CharT, _InputIterator>::do_get(
     iter_type __b, iter_type __e, bool __intl, ios_base& __iob, ios_base::iostate& __err, long double& __v) const {
@@ -735,7 +735,7 @@ public:
 
   _LIBCPP_HIDE_FROM_ABI explicit money_put(size_t __refs = 0) : locale::facet(__refs) {}
 
-#if _LIBCPP_HAS_LONG_DOUBLE
+#ifndef __CBC__
   _LIBCPP_HIDE_FROM_ABI iter_type
   put(iter_type __s, bool __intl, ios_base& __iob, char_type __fl, long double __units) const {
     return do_put(__s, __intl, __iob, __fl, __units);
@@ -752,7 +752,7 @@ public:
 protected:
   _LIBCPP_HIDE_FROM_ABI_VIRTUAL ~money_put() override {}
 
-#if _LIBCPP_HAS_LONG_DOUBLE
+#ifndef __CBC__
   virtual iter_type do_put(iter_type __s, bool __intl, ios_base& __iob, char_type __fl, long double __units) const;
 #endif
   virtual iter_type
@@ -762,7 +762,7 @@ protected:
 template <class _CharT, class _OutputIterator>
 locale::id money_put<_CharT, _OutputIterator>::id;
 
-#if _LIBCPP_HAS_LONG_DOUBLE
+#ifndef __CBC__
 template <class _CharT, class _OutputIterator>
 _OutputIterator money_put<_CharT, _OutputIterator>::do_put(
     iter_type __s, bool __intl, ios_base& __iob, char_type __fl, long double __units) const {

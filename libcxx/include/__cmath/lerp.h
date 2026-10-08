@@ -44,11 +44,9 @@ _LIBCPP_HIDE_FROM_ABI inline constexpr double lerp(double __a, double __b, doubl
   return __lerp(__a, __b, __t);
 }
 
-#if _LIBCPP_HAS_LONG_DOUBLE
 _LIBCPP_HIDE_FROM_ABI inline constexpr long double lerp(long double __a, long double __b, long double __t) noexcept {
   return __lerp(__a, __b, __t);
 }
-#endif
 
 template <class _A1, class _A2, class _A3>
   requires(is_arithmetic_v<_A1> && is_arithmetic_v<_A2> && is_arithmetic_v<_A3>)

@@ -332,10 +332,12 @@ if (_LIBCXX_IS_CBC)
       "CBC uses compiler-rt builtins." FORCE)
 endif()
 
-# Long-double operating definitions (math overloads, stold, %Lf). CBC sets OFF
-# via configure-runtimes.sh (-DLIBCXX_ENABLE_LONG_DOUBLE=OFF).
+# Src-only: when OFF, omit long-double definitions from the dylib (stold,
+# to_chars(long double), __sort<long double*>, …). Headers always declare them.
+# CBC sets OFF via configure-runtimes.sh (-DLIBCXX_ENABLE_LONG_DOUBLE=OFF).
+# Not a __config_site feature: long double still exists; CBC cannot operate on it.
 option(LIBCXX_ENABLE_LONG_DOUBLE
-  "Provide libc++ APIs that operate on long double." ON)
+  "Emit long-double operating definitions in the libc++ dylib." ON)
 option(LIBCXX_HAS_WIN32_THREAD_API "Ignore auto-detection and force use of win32 thread API" OFF)
 option(LIBCXX_HAS_EXTERNAL_THREAD_API
   "Build libc++ with an externalized threading API.
@@ -623,6 +625,11 @@ function(cxx_add_basic_build_flags target)
   target_compile_definitions(${target} PRIVATE -D_LIBCPP_BUILDING_LIBRARY)
   target_compile_definitions(${target} PRIVATE -D_LIBCPP_AVAILABILITY_MINIMUM_HEADER_VERSION=${LIBCXX_AVAILABILITY_MINIMUM_HEADER_VERSION})
 
+  # Src-only long-double gate (not in __config_site). Default ON in sources.
+  if (NOT LIBCXX_ENABLE_LONG_DOUBLE)
+    target_compile_definitions(${target} PRIVATE -D_LIBCPP_HAS_LONG_DOUBLE=0)
+  endif()
+
   # Make sure the library can be build without transitive includes. This makes
   # it easier to upgrade the library to a newer language standard without build
   # errors.
@@ -788,7 +795,6 @@ config_define(${LIBCXX_ENABLE_UNICODE} _LIBCPP_HAS_UNICODE)
 config_define(${LIBCXX_ENABLE_WIDE_CHARACTERS} _LIBCPP_HAS_WIDE_CHARACTERS)
 config_define(${LIBCXX_ENABLE_TIME_ZONE_DATABASE} _LIBCPP_HAS_TIME_ZONE_DATABASE)
 config_define(${LIBCXX_ENABLE_VENDOR_AVAILABILITY_ANNOTATIONS} _LIBCPP_HAS_VENDOR_AVAILABILITY_ANNOTATIONS)
-config_define(${LIBCXX_ENABLE_LONG_DOUBLE} _LIBCPP_HAS_LONG_DOUBLE)
 
 # Set C library in use
 if (RUNTIMES_USE_LIBC STREQUAL "picolibc")
