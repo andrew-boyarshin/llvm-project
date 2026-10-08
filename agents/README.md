@@ -75,6 +75,7 @@ scope**, and CBC function pointers are deliberately not executable (`13-engine-c
 | 24  | `[24-lld-integration.md](24-lld-integration.md)`         | Delete `cbc-ld`. Linux: ELF `ld.lld --cbc` writes a `.cbc`. No wrap, no `cbc_native`. Constructs `CBCTargetMachine` by CBC name (not `lookupTarget(triple)`). Authoritative over `10` §2.1 and `09` §4.2 for where the linker lives. |
 | 25  | `[25-cbc-native-libraries.md](25-cbc-native-libraries.md)` | Two stages: **25a** wrap blob+ctor + `launcher` on `.cbc`/`.so`; **25b** N2C stubs / native symbols for CBC exports. Also `.a`/`.bc`/`-r` packaging. No host exe wrap. No `cbc_native`. |
 | 26  | `[26-cbc-as-native-flavor.md](26-cbc-as-native-flavor.md)` | Two stages: **26a** host triple + `-fcbc`, module flag, `long double` policy (no `cbc_native`); **26b** `__attribute__((cbc_native))` and mixed codegen. Does **not** delete `llvm/lib/Target/CBC`. |
+| 27  | `[27-objdump-and-disassembler.md](27-objdump-and-disassembler.md)` | What `llvm-objdump -d` needs for `.cbc` and wrap ELF (`CBCObjectFile`, full `decodeCBCInst`); why stock TableGen cannot emit the decoder; Wasm/format-table alternatives. |
 
 
 
