@@ -68,3 +68,13 @@ public:
 TargetPassConfig *CBCTargetMachine::createPassConfig(PassManagerBase &PM) {
   return new CBCPassConfig(*this, PM);
 }
+
+void llvm::CBCStoreExportsOnTargetMachine(TargetMachine &TM,
+                                          SmallVector<CBCExport, 0> Exports) {
+  static_cast<CBCTargetMachine &>(TM).Exports = std::move(Exports);
+}
+
+SmallVector<CBCExport, 0>
+llvm::CBCTakeExportsFromTargetMachine(TargetMachine &TM) {
+  return std::move(static_cast<CBCTargetMachine &>(TM).Exports);
+}

@@ -30,6 +30,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
+#include "CBCFileWriter.h"
 #include <set>
 #include <utility>
 #include <vector>
@@ -228,42 +229,59 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
       PB.buildPerModuleDefaultPipeline(OptimizationLevel::O2);
   MPM.run(*Composite, MAM);
 
-  static const char *Unsupported[] = {
-      "qsort", "qsort_r", "bsearch", "lfind", "lsearch", "tsearch", "tfind",
-      "tdelete", "twalk", "twalk_r", "tdestroy", "ftw", "nftw", "ftw64",
-      "nftw64", "pthread_create", "pthread_once", "pthread_atfork"};
+  // Native shared-library wrap: N2C stubs make CBC callbacks legal for
+  // qsort/pthread_create/etc. Keep pthread_atfork (fork, not attach) and the
+  // existing signal/sigaction async crt guard. Deprecated .cbc emit keeps
+  // today's checks.
   bool Failed = false;
-  for (Function &F : *Composite) {
-    if (!F.isDeclaration() || F.use_empty())
-      continue;
-    for (const char *Name : Unsupported) {
-      if (F.getName() == Name) {
-        error("'" + F.getName() +
-              "' is not supported on CBC: its callback would be called by "
-              "native code");
-        Failed = true;
+  if (!request.wrap) {
+    static const char *Unsupported[] = {
+        "qsort", "qsort_r", "bsearch", "lfind", "lsearch", "tsearch", "tfind",
+        "tdelete", "twalk", "twalk_r", "tdestroy", "ftw", "nftw", "ftw64",
+        "nftw64", "pthread_create", "pthread_once", "pthread_atfork"};
+    for (Function &F : *Composite) {
+      if (!F.isDeclaration() || F.use_empty())
+        continue;
+      for (const char *Name : Unsupported) {
+        if (F.getName() == Name) {
+          error("'" + F.getName() +
+                "' is not supported on CBC: its callback would be called by "
+                "native code");
+          Failed = true;
+        }
       }
     }
-  }
-  for (Function &F : *Composite) {
-    for (BasicBlock &BB : F) {
-      for (Instruction &I : BB) {
-        auto *CB = dyn_cast<CallBase>(&I);
-        if (!CB)
-          continue;
-        const Function *Callee = CB->getCalledFunction();
-        if (!Callee || !Callee->isDeclaration())
-          continue;
-        for (const Use &U : CB->args()) {
-          const Value *V = U->stripPointerCasts();
-          const auto *AF = dyn_cast<Function>(V);
-          if (AF && !AF->isDeclaration()) {
-            error("passing CBC function '" + AF->getName() +
-                  "' to native function '" + Callee->getName() +
-                  "'; native code calling CBC code is not supported");
-            Failed = true;
+    for (Function &F : *Composite) {
+      for (BasicBlock &BB : F) {
+        for (Instruction &I : BB) {
+          auto *CB = dyn_cast<CallBase>(&I);
+          if (!CB)
+            continue;
+          const Function *Callee = CB->getCalledFunction();
+          if (!Callee || !Callee->isDeclaration())
+            continue;
+          for (const Use &U : CB->args()) {
+            const Value *V = U->stripPointerCasts();
+            const auto *AF = dyn_cast<Function>(V);
+            if (AF && !AF->isDeclaration()) {
+              error("passing CBC function '" + AF->getName() +
+                    "' to native function '" + Callee->getName() +
+                    "'; native code calling CBC code is not supported");
+              Failed = true;
+            }
           }
         }
+      }
+    }
+  } else {
+    // Shared-library link: still reject pthread_atfork (fork, not attach).
+    for (Function &F : *Composite) {
+      if (!F.isDeclaration() || F.use_empty())
+        continue;
+      if (F.getName() == "pthread_atfork") {
+        error("'pthread_atfork' is not supported on CBC: fork handlers are "
+              "not N2C-attached");
+        Failed = true;
       }
     }
   }
@@ -305,7 +323,45 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
 
   out.bytes = std::move(Buf);
   out.triple = ExpectedTriple;
-  return true;
+
+  // Copy method-offset exports from CBC codegen (index 0 == __cbc_lib_start).
+  SmallVector<llvm::CBCExport, 0> CodegenExports =
+      CBCTakeExportsFromTargetMachine(*TM);
+  out.exports.clear();
+  for (const llvm::CBCExport &E : CodegenExports) {
+    // N2C stubs hardcode cpStackSize=0, so the export's own Params must fit
+    // the host register file. MaxCalleeStackArgs is outgoing call stack slots
+    // (callee arity), not this prototype — do not gate on it.
+    if (E.VarArg) {
+      error("CBC native shared library: varargs export '" + E.Name +
+            "' is not supported");
+      return false;
+    }
+    unsigned Ints = 0, Floats = 0;
+    for (char C : E.Params) {
+      if (C == 'f')
+        ++Floats;
+      else
+        ++Ints;
+    }
+    // SysV: 6 int + 8 SSE; AAPCS: 8 int + 8 SIMD. Use the looser int limit.
+    if (Ints > 8 || Floats > 8) {
+      error("CBC native shared library: export '" + E.Name +
+            "' does not fit the host register file");
+      return false;
+    }
+    cbc::CBCExport OutE;
+    OutE.name = E.Name;
+    OutE.offset = E.Offset;
+    OutE.defaultVis = E.DefaultVis;
+    OutE.addressTaken = E.AddressTaken;
+    OutE.varArg = E.VarArg;
+    OutE.params = E.Params;
+    OutE.retFloat = E.RetFloat;
+    OutE.maxCalleeStackArgs = E.MaxCalleeStackArgs;
+    out.exports.push_back(std::move(OutE));
+  }
+  return errorCount() == 0;
 }
 
 bool cbc::link(const CBCLinkRequest &request) {

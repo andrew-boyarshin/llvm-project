@@ -402,15 +402,21 @@ renamed `long double` name unavailable, so no optimization creates new calls to 
 ### 5.5 Unsupported functions
 
 A reference that remains after LTO (phase 1) or after `--gc-sections` (phase 2) to any of
-these names, resolving to a native library, is a link error:
+these names, resolving to a native library, is a link error for **standalone `.cbc` emit**:
 `error: 'qsort' is not supported on CBC: its comparator would be called by native code
 (referenced from 'sort_entries' at util.c:42)`.
 
+**Native shared libraries** (`-fcbc -shared`, `25b`): every CBC method gets an N2C stub, so
+callback-taking libc (`qsort`, `qsort_r`, `bsearch`, `lfind`/`lsearch`, `tsearch*`,
+`ftw*`, `pthread_create`, `pthread_once`) and passing CBC function pointers to native
+code are **allowed**. Still rejected: `pthread_atfork` (fork, not attach) and
+`signal`/`sigaction` CBC handlers (async — existing crt guard).
+
 | Group | Functions | Reason | What to use instead |
 |---|---|---|---|
-| sorting and searching | `qsort`, `qsort_r`, `bsearch`, `lfind`, `lsearch`, `tsearch`, `tfind`, `tdelete`, `twalk`, `twalk_r`, `tdestroy` | comparator/action callback | `std::sort`/`std::lower_bound` (header templates, compiled as CBC), or a C implementation compiled into the program |
-| file-tree walking | `ftw`, `nftw`, `ftw64`, `nftw64` | per-entry callback | `opendir`/`readdir` loop |
-| threads and once-initialization | `pthread_create`, `pthread_once`, `pthread_atfork`, `call_once`, `thrd_create`, `__pthread_register_cancel`, `_pthread_cleanup_push`, `_pthread_cleanup_push_defer` (what `pthread_cleanup_push` expands to) | start routine / init routine / cleanup handler | single-threaded code; a flag checked before initialization |
+| sorting and searching | `qsort`, `qsort_r`, `bsearch`, `lfind`, `lsearch`, `tsearch`, `tfind`, `tdelete`, `twalk`, `twalk_r`, `tdestroy` | comparator/action callback | `.cbc`: `std::sort` / own C impl. Shared library: native `qsort` with CBC comparator OK |
+| file-tree walking | `ftw`, `nftw`, `ftw64`, `nftw64` | per-entry callback | `.cbc`: `opendir`/`readdir`. Shared library: OK via N2C |
+| threads and once-initialization | `pthread_create`, `pthread_once`, `pthread_atfork`, `call_once`, `thrd_create`, `__pthread_register_cancel`, `_pthread_cleanup_push`, `_pthread_cleanup_push_defer` (what `pthread_cleanup_push` expands to) | start routine / init routine / cleanup handler | Shared library: `pthread_create`/`pthread_once` OK; `pthread_atfork` still unsupported |
 | thread-specific data | `pthread_key_create`, `pthread_key_delete`, `pthread_getspecific`, `pthread_setspecific`, `tss_create`, `tss_delete`, `tss_get`, `tss_set` | destructor callback; and native per-OS-thread storage is wrong for a fiber the scheduler may move between OS threads | `thread_local`/`_Thread_local` (emulated TLS on the fiber control block, §5.3) |
 | custom streams and hooks | `fopencookie`, `funopen`, `register_printf_function`, `register_printf_specifier`, `register_printf_modifier`, `register_printf_type`, `argp_parse`, `dl_iterate_phdr`, `ssignal`, `sigvec` | callbacks | — |
 | execution contexts | `getcontext`, `setcontext`, `makecontext`, `swapcontext`, `vfork` | operate on the native stack and control flow | — |
@@ -439,7 +445,7 @@ call to a native function, the legalizer classifies the value by looking through
 
 | Argument value | Result |
 |---|---|
-| a CBC function (`ptr @f` of a defined function, including compiler-generated wrappers), or a `select`/`phi` that may be one | **error** `passing CBC function 'cmp' to native function 'scandir'; native code calling CBC code is not supported` |
+| a CBC function (`ptr @f` of a defined function, including compiler-generated wrappers), or a `select`/`phi` that may be one | **`.cbc` emit**: **error**. **Native shared library**: accepted (N2C stub; CBC `call.indirect` of `&foo` is I2I via `FunctionDescriptors::Lookup`) |
 | null, or a native function | accepted |
 | unknown (loaded from memory, a parameter, a call result) | warning `-Wcbc-native-fnptr` (on by default): `function pointer passed to native function 'foo' may be a CBC function` |
 

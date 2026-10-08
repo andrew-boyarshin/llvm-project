@@ -4,7 +4,7 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Host-triple wrap of a finished .cbc: blob + DSO ctor that calls
+// Host-triple wrap of a finished .cbc: blob + N2C stubs + DSO ctor that calls
 // engine_load_buffer. Native -shared link is deferred until after the CBC
 // CommonLinkerContext is destroyed (see lld/Common/DriverDispatcher.cpp).
 //
@@ -19,6 +19,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -51,11 +52,100 @@ Triple hostTripleFromCBC(const Triple &CBC) {
                 CBC.getEnvironmentName());
 }
 
+bool isAlwaysHiddenExport(StringRef Name) {
+  return Name == "main" || Name == "__cbc_main" || Name == "__cbc_entry" ||
+         Name == "__cbc_lib_start";
+}
+
+FunctionType *exportFunctionType(LLVMContext &Ctx, const cbc::CBCExport &E) {
+  Type *Ret = E.retFloat ? Type::getDoubleTy(Ctx) : Type::getVoidTy(Ctx);
+  // Non-float CBC returns are i64 in the file writer; void only for empty
+  // ret when we lack a better signal. Prefer i64 for non-float (matches
+  // MethodSigs) so declarations stay ABI-plausible.
+  if (!E.retFloat)
+    Ret = Type::getInt64Ty(Ctx);
+  SmallVector<Type *, 8> Params;
+  for (char C : E.params)
+    Params.push_back(C == 'f' ? Type::getDoubleTy(Ctx)
+                              : Type::getInt64Ty(Ctx));
+  return FunctionType::get(Ret, Params, /*isVarArg=*/false);
+}
+
+void appendX86Stub(raw_ostream &OS, StringRef Name, unsigned Index,
+                   bool Hidden) {
+  OS << "  .text\n";
+  OS << "  .p2align 4, 0x90\n";
+  OS << "  .globl " << Name << "\n";
+  if (Hidden)
+    OS << "  .hidden " << Name << "\n";
+  OS << "  .type " << Name << ",@function\n";
+  OS << Name << ":\n";
+  OS << "  movq (%rsp), %r11\n";
+  OS << "  subq $16, %rsp\n";
+  OS << "  movq %r11, (%rsp)\n";
+  OS << "  leaq .Lenter_" << Index << "(%rip), %r11\n";
+  OS << "  movq %r11, 16(%rsp)\n";
+  OS << "  movq $0, 8(%rsp)\n";
+  OS << "  jmp CJ_MCC_N2CStub@PLT\n";
+  OS << ".Lenter_" << Index << ":\n";
+  OS << "  movq __cbc_exported_handles+" << (8u * Index) << "(%rip), %rax\n";
+  OS << "  jmp *8(%rax)\n";
+  OS << "  .size " << Name << ", .-" << Name << "\n";
+}
+
+void appendAArch64Stub(raw_ostream &OS, StringRef Name, unsigned Index,
+                       bool Hidden) {
+  OS << "  .text\n";
+  OS << "  .align 2\n";
+  OS << "  .globl " << Name << "\n";
+  if (Hidden)
+    OS << "  .hidden " << Name << "\n";
+  OS << "  .type " << Name << ",%function\n";
+  OS << Name << ":\n";
+  // Plant [sp]=enter, [sp+8]=cpStackSize=0; keep x0-x7 / x30 for the caller.
+  OS << "  adr x9, .Lenter_" << Index << "\n";
+  OS << "  mov x10, #0\n";
+  OS << "  stp x9, x10, [sp, #-16]!\n";
+  OS << "  adrp x16, :got:CJ_MCC_N2CStub\n";
+  OS << "  ldr x16, [x16, :got_lo12:CJ_MCC_N2CStub]\n";
+  OS << "  br x16\n";
+  OS << ".Lenter_" << Index << ":\n";
+  OS << "  adrp x9, __cbc_exported_handles\n";
+  OS << "  add x9, x9, :lo12:__cbc_exported_handles\n";
+  OS << "  ldr x9, [x9, #" << (8u * Index) << "]\n";
+  OS << "  ldr x10, [x9, #8]\n";
+  OS << "  br x10\n";
+  OS << "  .size " << Name << ", .-" << Name << "\n";
+}
+
+std::string buildStubModuleAsm(const Triple &Host,
+                               ArrayRef<cbc::CBCExport> Exports) {
+  std::string Asm;
+  raw_string_ostream OS(Asm);
+  bool IsAArch64 = Host.isAArch64();
+  for (unsigned I = 0, E = Exports.size(); I != E; ++I) {
+    const cbc::CBCExport &Ex = Exports[I];
+    bool Hidden =
+        isAlwaysHiddenExport(Ex.name) || !(Ex.defaultVis || Ex.addressTaken);
+    if (IsAArch64)
+      appendAArch64Stub(OS, Ex.name, I, Hidden);
+    else
+      appendX86Stub(OS, Ex.name, I, Hidden);
+  }
+  OS.flush();
+  return Asm;
+}
+
 std::unique_ptr<Module> buildWrapModule(LLVMContext &Ctx,
                                         const cbc::CBCLinkResult &Result) {
   auto M = std::make_unique<Module>("cbc-wrap", Ctx);
   Triple Host = hostTripleFromCBC(Result.triple);
   M->setTargetTriple(Host);
+
+  if (Result.exports.empty()) {
+    error("CBC wrap: no method exports (missing __cbc_lib_start?)");
+    return nullptr;
+  }
 
   Constant *BlobInit = ConstantDataArray::get(
       Ctx, ArrayRef<uint8_t>(
@@ -72,6 +162,41 @@ std::unique_ptr<Module> buildWrapModule(LLVMContext &Ctx,
   Type *I32 = Type::getInt32Ty(Ctx);
   Type *Void = Type::getVoidTy(Ctx);
 
+  // ExportedInfo: { ptr, i32, i32 } — 16 bytes on LP64.
+  StructType *ExportedInfoTy =
+      StructType::create(Ctx, {I8Ptr, I32, I32}, "ExportedInfo");
+
+  const unsigned N = Result.exports.size();
+  ArrayType *HandlesTy = ArrayType::get(I8Ptr, N);
+  ArrayType *InfosTy = ArrayType::get(ExportedInfoTy, N);
+
+  auto *Handles = new GlobalVariable(
+      *M, HandlesTy, /*isConstant=*/false, GlobalValue::InternalLinkage,
+      Constant::getNullValue(HandlesTy), "__cbc_exported_handles");
+  Handles->setAlignment(Align(8));
+
+  SmallVector<Constant *, 8> InfoElts;
+  for (unsigned I = 0; I < N; ++I) {
+    const cbc::CBCExport &E = Result.exports[I];
+    Function *Decl = Function::Create(exportFunctionType(Ctx, E),
+                                      GlobalValue::ExternalLinkage, E.name, *M);
+    bool Hidden =
+        isAlwaysHiddenExport(E.name) || !(E.defaultVis || E.addressTaken);
+    Decl->setVisibility(Hidden ? GlobalValue::HiddenVisibility
+                               : GlobalValue::DefaultVisibility);
+    // Body is module asm; keep as a declaration for IR references.
+    InfoElts.push_back(ConstantStruct::get(
+        ExportedInfoTy,
+        {Decl, ConstantInt::get(I32, E.offset), ConstantInt::get(I32, 0)}));
+  }
+  auto *Infos = new GlobalVariable(*M, InfosTy, /*isConstant=*/true,
+                                   GlobalValue::InternalLinkage,
+                                   ConstantArray::get(InfosTy, InfoElts),
+                                   "__cbc_exported_infos");
+  Infos->setAlignment(Align(8));
+
+  M->appendModuleInlineAsm(buildStubModuleAsm(Host, Result.exports));
+
   StructType *DlInfoTy =
       StructType::create(Ctx, {I8Ptr, I8Ptr, I8Ptr, I8Ptr}, "struct.Dl_info");
 
@@ -82,7 +207,7 @@ std::unique_ptr<Module> buildWrapModule(LLVMContext &Ctx,
       "realpath", FunctionType::get(I8Ptr, {I8Ptr, I8Ptr}, false));
   FunctionCallee LoadBuffer = M->getOrInsertFunction(
       "engine_load_buffer",
-      FunctionType::get(I32, {I8Ptr, I64, I8Ptr}, false));
+      FunctionType::get(I32, {I8Ptr, I64, I8Ptr, I32, I8Ptr, I8Ptr}, false));
 
   Function *InitFn = Function::Create(FunctionType::get(Void, false),
                                       GlobalValue::InternalLinkage,
@@ -104,7 +229,8 @@ std::unique_ptr<Module> buildWrapModule(LLVMContext &Ctx,
 
   Value *BlobPtr = Blob;
   Value *Len = ConstantInt::get(I64, Result.bytes.size());
-  B.CreateCall(LoadBuffer, {BlobPtr, Len, Path});
+  Value *Count = ConstantInt::get(I32, N);
+  B.CreateCall(LoadBuffer, {BlobPtr, Len, Path, Count, Infos, Handles});
   B.CreateRetVoid();
 
   // Emit into .init_array directly. Host codegen of llvm.global_ctors into a
@@ -160,6 +286,8 @@ bool emitSharedWrap(StringRef outputPath, const CBCLinkResult &result,
 
   LLVMContext Ctx;
   std::unique_ptr<Module> M = buildWrapModule(Ctx, result);
+  if (!M)
+    return false;
   Triple Host = hostTripleFromCBC(result.triple);
 
   SmallVector<char, 0> ObjBuf;
@@ -213,4 +341,3 @@ bool emitSharedWrap(StringRef outputPath, const CBCLinkResult &result,
 
 } // namespace cbc
 } // namespace lld
-

@@ -2,6 +2,7 @@
 #define LLVM_LIB_TARGET_CBC_CBCFILEWRITER_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include <string>
 #include <vector>
@@ -16,6 +17,9 @@ struct CBCCompiledMethod {
   /// 'i' or 'f' per parameter. Non-float results use the I64 term, matching calls.
   std::string Params;
   bool RetFloat = false;
+  bool DefaultVis = false;
+  bool AddressTaken = false;
+  bool VarArg = false;
   unsigned UntypedSlots = 0;
   uint32_t UntypedMemSize = 0;
   uint8_t UsesAlloca = 0;
@@ -34,6 +38,19 @@ struct CBCCompiledMethod {
   std::vector<ExRegion> Regions;
 };
 
+/// One CBC method as a native shared-library export (N2C stub).
+/// Index 0 is always `__cbc_lib_start` when wrap is set.
+struct CBCExport {
+  std::string Name;
+  uint32_t Offset = 0; // pool Offset<MethodDefinition>
+  bool DefaultVis = false;
+  bool AddressTaken = false;
+  bool VarArg = false;
+  std::string Params; // 'i'/'f'
+  bool RetFloat = false;
+  unsigned MaxCalleeStackArgs = 0;
+};
+
 struct CBCNativeCallee {
   std::string Name;
   bool Native = true;
@@ -50,12 +67,26 @@ struct CBCImageInfo {
   std::string Relocs;
 };
 
+struct CBCFileBuildResult {
+  std::string Bytes;
+  SmallVector<CBCExport, 0> Exports; // index 0 == __cbc_lib_start when present
+};
+
 /// Write a whole-program `.cbc` whose entry method is `main`.
 /// AotDeps is a ':'-separated list of native library names (without lib/ .so).
-std::string buildCBCFile(ArrayRef<CBCCompiledMethod> Methods,
-                         ArrayRef<CBCNativeCallee> Natives = {},
-                         CBCImageInfo Image = {},
-                         StringRef AotDeps = {});
+/// When RequireLibStart is true, `__cbc_lib_start` must exist and is placed first.
+CBCFileBuildResult buildCBCFile(ArrayRef<CBCCompiledMethod> Methods,
+                                ArrayRef<CBCNativeCallee> Natives = {},
+                                CBCImageInfo Image = {},
+                                StringRef AotDeps = {},
+                                bool RequireLibStart = false);
+
+class TargetMachine;
+
+/// Store / take the export table produced by CBCAsmPrinter on CBCTargetMachine.
+void CBCStoreExportsOnTargetMachine(TargetMachine &TM,
+                                    SmallVector<CBCExport, 0> Exports);
+SmallVector<CBCExport, 0> CBCTakeExportsFromTargetMachine(TargetMachine &TM);
 
 } // namespace llvm
 

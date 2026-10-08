@@ -4,6 +4,7 @@
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
+#include <utility>
 
 using namespace llvm;
 
@@ -201,9 +202,27 @@ static std::string codeBlock(const CBCCompiledMethod &M) {
   return O;
 }
 
-std::string llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> Methods,
-                                 ArrayRef<CBCNativeCallee> Natives,
-                                 CBCImageInfo Image, StringRef AotDeps) {
+CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
+                                      ArrayRef<CBCNativeCallee> Natives,
+                                      CBCImageInfo Image, StringRef AotDeps,
+                                      bool RequireLibStart) {
+  // Reorder so __cbc_lib_start is first when present / required.
+  SmallVector<CBCCompiledMethod, 8> Ordered(MethodsIn.begin(), MethodsIn.end());
+  {
+    size_t LibStart = Ordered.size();
+    for (size_t I = 0; I < Ordered.size(); ++I) {
+      if (Ordered[I].Name == "__cbc_lib_start") {
+        LibStart = I;
+        break;
+      }
+    }
+    if (RequireLibStart && LibStart == Ordered.size())
+      report_fatal_error("CBC wrap requires a method named __cbc_lib_start");
+    if (LibStart != Ordered.size() && LibStart != 0)
+      std::swap(Ordered[0], Ordered[LibStart]);
+  }
+  ArrayRef<CBCCompiledMethod> Methods = Ordered;
+
   const StringRef EntryName = "$cbc.ex:Entry";
   std::string Pool;
   auto add = [&](StringRef Bytes) {
@@ -369,6 +388,7 @@ std::string llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> Methods,
     Sig.RetFloat = M.RetFloat;
     MethodSigs.push_back(sigTerm(Sig));
   }
+  SmallVector<CBCExport, 0> Exports;
   for (size_t I = 0; I < Methods.size(); ++I) {
     std::string Def;
     appendU32(Def, NameOffs[I]);
@@ -379,7 +399,11 @@ std::string llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> Methods,
     Def.push_back(0x01);
     appendULEB(Def, Codes[I]);
     Def.push_back(0);
-    MDefs.push_back(add(Def));
+    uint32_t Off = add(Def);
+    MDefs.push_back(Off);
+    const CBCCompiledMethod &M = Methods[I];
+    Exports.push_back({M.Name, Off, M.DefaultVis, M.AddressTaken, M.VarArg,
+                       M.Params, M.RetFloat, M.MaxCalleeStackArgs});
   }
 
   std::string Type;
@@ -502,5 +526,9 @@ std::string llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> Methods,
   putS32(48, SAotDeps == UINT32_MAX ? -1 : static_cast<int32_t>(SAotDeps));
   putS32(52, -1);
 
-  return Header + Pool + TypeIndex + Aot + MRefArr + FRefArr + TermArr + Ext + Region;
+  CBCFileBuildResult Result;
+  Result.Bytes =
+      Header + Pool + TypeIndex + Aot + MRefArr + FRefArr + TermArr + Ext + Region;
+  Result.Exports = std::move(Exports);
+  return Result;
 }

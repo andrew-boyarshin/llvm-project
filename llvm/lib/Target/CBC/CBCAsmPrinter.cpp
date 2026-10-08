@@ -444,9 +444,13 @@ public:
     }
     M.Code.assign(reinterpret_cast<const uint8_t *>(Buf.begin()),
                   reinterpret_cast<const uint8_t *>(Buf.end()));
-    for (const Argument &Arg : MF.getFunction().args())
+    const Function &Fn = MF.getFunction();
+    for (const Argument &Arg : Fn.args())
       M.Params.push_back(Arg.getType()->isFloatingPointTy() ? 'f' : 'i');
-    M.RetFloat = MF.getFunction().getReturnType()->isFloatingPointTy();
+    M.RetFloat = Fn.getReturnType()->isFloatingPointTy();
+    M.DefaultVis = Fn.getVisibility() == GlobalValue::DefaultVisibility;
+    M.AddressTaken = Fn.hasAddressTaken();
+    M.VarArg = Fn.isVarArg();
     M.StatePoints = std::move(StatePoints);
     Methods.push_back(std::move(M));
     return false;
@@ -458,7 +462,8 @@ public:
     bool HasMain = false;
     for (const CBCCompiledMethod &Meth : Methods)
       HasMain |= Meth.Name == "main";
-    if (!HasMain && !M.getModuleFlag("cbc-wrap"))
+    bool Wrap = M.getModuleFlag("cbc-wrap") != nullptr;
+    if (!HasMain && !Wrap)
       report_fatal_error("CBC object emission requires a function named main");
     CBCImageInfo Image;
     std::string AotDeps;
@@ -488,8 +493,11 @@ public:
             AotDeps = S->getString().str();
       }
     }
+    CBCFileBuildResult Built =
+        buildCBCFile(Methods, Natives, Image, AotDeps, Wrap);
+    CBCStoreExportsOnTargetMachine(TM, std::move(Built.Exports));
     OutStreamer->switchSection(getObjFileLowering().getTextSection());
-    OutStreamer->emitBytes(buildCBCFile(Methods, Natives, Image, AotDeps));
+    OutStreamer->emitBytes(Built.Bytes);
   }
 };
 } // namespace

@@ -15,12 +15,13 @@ components that implement each piece are specified in `05`–`10`; references po
 
 **Non-goals (and why)**
 
-* Native code calling CBC code (callbacks into CBC, `pthread_create` of CBC code, signal
-  handlers). Native entry into the interpreter depends on unverified runtime behaviour
-  (`13-engine-changes.md` §8), so it is out of scope; CBC function pointers are
-  non-executable descriptors (§7.1) and cannot be called by native code at all. Callback-taking libc functions (`qsort`, `bsearch`, `ftw`,
-  `pthread_once`, …) are therefore unsupported and rejected at link time (§8.4); they are
-  not re-implemented in CBC.
+* Native code calling CBC code from a **standalone `.cbc`** (callbacks into CBC,
+  `pthread_create` of CBC code, signal handlers). CBC function pointers there are
+  non-executable descriptors (§7.1). Callback-taking libc functions (`qsort`, `bsearch`,
+  `ftw`, `pthread_once`, …) are rejected at link time for `.cbc` emit (§8.4). **Native
+  shared libraries** (`-fcbc -shared`, `25b`) give every CBC method an N2C stub: `qsort` /
+  `pthread_create` / passing CBC fnptrs to native code are legal there; `signal` /
+  `pthread_atfork` remain unsupported.
 * Inline assembly: no CBC assembler dialect in C sources (clang rejects it).
 * SIMD intrinsics (`immintrin.h`, `arm_neon.h`): there are no vector registers. Generic
   vector types (`__attribute__((vector_size))`) work through scalarization.
@@ -469,12 +470,12 @@ register; there is no IR-level rewriting, no dispatcher and no per-signature mac
 
 * Native function pointers flow freely: they can be stored, passed to native code, and
   called from CBC code with `call.indirect`.
-* **CBC function pointers passed to native code are out of scope.** A descriptor address is
-  not executable; native code calling it faults (`13-engine-changes.md` §8).
-  Callback-taking libc functions are unsupported (§8.4). Passing a provable CBC function
-  to a function-pointer parameter of any native function is a link-time **error**; passing
-  a function pointer of unknown origin is a warning (`CBCNativeCallLegalizer`,
-  `07-ir-passes.md` §6; `10-linker-and-runtime.md` §5.6).
+* **CBC function pointers passed to native code** — for standalone `.cbc` emit, out of
+  scope (non-executable descriptors; link-time **error**). For **native shared libraries**
+  (`25b`), every method has an N2C stub at the same address `ld.fnptr` / `call.indirect`
+  use, so callbacks are legal and the legalizer does not reject them
+  (`07-ir-passes.md` §6; `10-linker-and-runtime.md` §5.5–§5.6). Signal handlers and
+  `pthread_atfork` stay unsupported.
 * Taking the address of a **native variadic** function is rejected unless the function has
   a `v*` variant (`printf` → `vprintf`, …): CBC-internal indirect variadic calls use the
   buffer convention (§10.1), which a native variadic callee cannot accept. For functions
@@ -513,8 +514,8 @@ is `*__errno_location()` (a native call) as in glibc headers.
 | returns in two float registers (`_Complex double` functions such as `csqrt`, `cexp`), AArch64 HFA returns (including `_Complex float`) | `xmm1`/`d1..d3` lost | compile-time error (unsupported); `cabs`, `carg` and x86-64 `_Complex float` functions return one register and work |
 | variadic with floating-point variadic arguments (`printf("%f")`) | x86-64: the callee reads `al` to decide whether to save vector registers | none needed: with E7 the engine sets `al = 8` before every native call, so the call is a plain native variadic call (§10.2) |
 | `long double` in the prototype (`sinl`, `strtold`, `modfl`, …) | different representation | calls renamed to the `double` function (`sinl` → `sin`), exact because CBC `long double` is `double`; without a rename entry: compile-time error. `%L` floating conversions in constant format strings: clang error (`09-clang.md` §2) |
-| takes a callback that native code would call (`qsort`, `qsort_r`, `bsearch`, `lfind`/`lsearch`, `tsearch` family, `ftw`/`nftw`, `pthread_create`, `pthread_once`, `pthread_atfork`, `call_once`, `thrd_create`, `pthread_key_*`, `tss_*`, `fopencookie`, `dl_iterate_phdr`, …) | native code calling CBC code is out of scope (§7.3) | **unsupported**: link-time error (`10-linker-and-runtime.md` §5.5) |
-| optional callback (`glob` errfunc, `scandir` filter/compar) | same, but only if a CBC function is passed | native call; passing a CBC function is an error, passing null or a native function (`alphasort`) is fine |
+| takes a callback that native code would call (`qsort`, `qsort_r`, `bsearch`, `lfind`/`lsearch`, `tsearch` family, `ftw`/`nftw`, `pthread_create`, `pthread_once`, `pthread_atfork`, `call_once`, `thrd_create`, `pthread_key_*`, `tss_*`, `fopencookie`, `dl_iterate_phdr`, …) | native→CBC | **`.cbc` emit**: link-time error. **Native shared library**: N2C stubs make `qsort` / `pthread_create` / `pthread_once` / CBC fnptrs legal; keep rejecting `pthread_atfork` and signal handlers (`10-linker-and-runtime.md` §5.5) |
+| optional callback (`glob` errfunc, `scandir` filter/compar) | same, but only if a CBC function is passed | `.cbc`: error if CBC fnptr; shared library: CBC fnptr OK via N2C; null / native (`alphasort`) fine either way |
 | installs a signal handler (`signal`, `sigaction`, `sigset`, `bsd_signal`, `sysv_signal`) | the kernel would call a CBC function asynchronously | crt guards accept only `SIG_DFL`/`SIG_IGN` (`SIG_HOLD` for `sigset`) and fail otherwise with `SIG_ERR`/`EINVAL` (`10-linker-and-runtime.md` §5.2) |
 | registers exit handlers (`atexit`, `on_exit`, `at_quick_exit`, `__cxa_atexit`, `__cxa_thread_atexit_impl`) | handlers must run in CBC | defined in CBC by `crt-cbc` and run by the CBC `exit` — the one exception to "callback-taking functions are unsupported", because the caller of the handlers is CBC code |
 | any of the rows above reached through a **native function pointer** (`call.indirect`, e.g. `&qsort` stored in a table) | same as for direct calls | the rules apply to address uses as well: taking the address of an unsupported native function is the same link-time error; `&ldiv` and `&printf` get CBC wrappers, `&sinl` is renamed; unknown native pointers obtained at run time (`dlsym`) are the program's responsibility |
@@ -756,7 +757,7 @@ Summary (full design in `08-exceptions-and-sjlj.md`):
 | `<threads.h>`, `std::thread` | unsupported (single fiber) | §14 |
 | `setjmp`/`longjmp` | supported | §12 |
 | `signal` handlers | unsupported (`SIG_DFL`/`SIG_IGN` work) | §14 |
-| callback-taking libc functions (`qsort`, `bsearch`, `tsearch`, `ftw`/`nftw`, `pthread_once`, `pthread_key_*`, …) | unsupported (link-time error) | §8.3, `10-linker-and-runtime.md` §5.5 |
+| callback-taking libc functions (`qsort`, `bsearch`, `tsearch`, `ftw`/`nftw`, `pthread_once`, `pthread_key_*`, …) | `.cbc`: unsupported (link-time error); native shared library: OK via N2C (not `pthread_atfork` / signal) | §8.3, `10-linker-and-runtime.md` §5.5 |
 | `atexit`, `__cxa_atexit`, C++ static destructors | supported | crt (§8.3) |
 | `<complex.h>` functions returning `_Complex double` | unsupported (compile-time error); complex arithmetic itself works (compiler-rt `__muldc3`/`__divdc3`) | §8.3 |
 | `long double` library functions | supported as `double` (`sinl` → `sin`) | §15 |
@@ -766,7 +767,7 @@ Summary (full design in `08-exceptions-and-sjlj.md`):
 | C++ virtual calls, member function pointers | supported, any number of virtual functions | §7 (descriptors + `call.indirect`) |
 | function pointers: casts, comparison, storage, pointers to native functions | supported | §7.1 |
 | `printf` and other native variadic functions with `double` arguments | supported, plain native calls | §10.2 (E7) |
-| CBC function pointers called by native code (callbacks) | unsupported (out of scope); descriptors are non-executable | §7.3, `13-engine-changes.md` §8 |
+| CBC function pointers called by native code (callbacks) | `.cbc`: unsupported (non-executable descriptors); native shared library: N2C stubs | §7.3, `25b` |
 | call through a null function pointer | reported and aborted (`NoneValueException` from `call.indirect`) | §7.1 |
 | `std::function`, lambdas | supported | plain C++ |
 | Coroutines (C++20) | supported in principle (LLVM lowers them to ordinary functions + heap frames) | — |

@@ -95,6 +95,10 @@ def err_drv_hipspv_no_hip_path : Error<
   "'--hip-path' must be specified when offloading to SPIR-V unless '-nogpuinc' "
   "is given">;
 
+def err_drv_cbc_missing_cangjie_home : Error<
+  "CBC shared library link requires CANGJIE_HOME (for libcbcengine and "
+  "libcangjie-runtime)">;
+
 def err_drv_sycl_no_rdc_multiple_targets : Error<
   "'%0' is not supported with multiple SYCL offloading targets">;
 

@@ -295,7 +295,10 @@ use of a native function's address, and applies, in this order:
    `'qsort' is not supported on CBC: its comparator would be called by native code`,
    reported with `DiagnosticInfoUnsupported` on the using function and the use's debug
    location when present. Because this pass runs after LTO, references from dead code
-   have already been removed and do not fail the link.
+   have already been removed and do not fail the link. **Native shared-library links**
+   (`cbc-wrap` / `-shared`) skip the callback-taking entries (`qsort`, `pthread_create`,
+   …) because every CBC method has an N2C stub; `pthread_atfork` and signal/async handlers
+   stay rejected.
 2. **`long double` renames.** For a native callee carrying the clang attribute
    `"cbc-long-double"` (`09-clang.md` §3.4): if `CBC_LIBC_RENAME(name, target)` exists,
    replace the callee (and every address use) with `target`, creating the declaration if
@@ -335,10 +338,10 @@ use of a native function's address, and applies, in this order:
    pointer to function in the call attribute `"cbc-fnptr-args"="i,j"` (`09-clang.md`
    §3.4). For each such argument the pass looks through casts, `select` and `phi`:
    * a CBC function (`ptr @f` of a defined function, including the wrappers of §4), or a
-     `select`/`phi` that may yield one: **error** `passing CBC function 'cmp' to native
-     function 'scandir'; native code calling CBC code is not supported`. The value would
-     be a non-executable descriptor, and a native call through it faults
-     (`13-engine-changes.md` §8);
+     `select`/`phi` that may yield one: on **`.cbc` emit**, **error** `passing CBC
+     function 'cmp' to native function 'scandir'; …`. On a **native shared library**
+     link, accepted (N2C stub address; `call.indirect` Lookup → I2I when CBC calls
+     `&foo`);
    * null or a native function: accepted (`scandir(d, &list, NULL, alphasort)`);
    * anything else: warning `-Wcbc-native-fnptr`
      `function pointer passed to native function 'foo' may be a CBC function`.
@@ -349,7 +352,8 @@ use of a native function's address, and applies, in this order:
    `-Wcbc-signal-handler` instead of an error, because the guarded call fails cleanly
    at run time (`10-linker-and-runtime.md` §5.2). For `sigaction` only a handler visible
    as a constant store into the `struct sigaction` passed as `act` in the same function is
-   found; other cases are left to the run-time guard.
+   found; other cases are left to the run-time guard. Signal/async CBC handlers remain
+   unsupported even in native shared libraries.
 7. **`setjmp` family** calls are handled by `CBCLowerSjLj` (`08-exceptions-and-sjlj.md`
    §8); the context functions and `vfork` are in the unsupported list (rule 1).
 

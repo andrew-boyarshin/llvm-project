@@ -1,7 +1,9 @@
 #ifndef LLVM_LIB_TARGET_CBC_CBCTARGETMACHINE_H
 #define LLVM_LIB_TARGET_CBC_CBCTARGETMACHINE_H
 
+#include "CBCFileWriter.h"
 #include "CBCSubtarget.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include "llvm/CodeGen/MachineFunction.h"
 
@@ -15,6 +17,9 @@ class CBCTargetMachine : public CodeGenTargetMachineImpl {
   CBCSubtarget Subtarget;
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
 public:
+  /// Filled by CBCAsmPrinter::emitEndOfAsmFile for native shared-library wrap.
+  SmallVector<CBCExport, 0> Exports;
+
   CBCTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                    StringRef FS, const TargetOptions &Options,
                    std::optional<Reloc::Model> RM,

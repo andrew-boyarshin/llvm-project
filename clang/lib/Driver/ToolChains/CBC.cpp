@@ -5,6 +5,8 @@
 #include "clang/Options/Options.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Process.h"
+#include <optional>
 
 using namespace clang::driver;
 using namespace clang::driver::toolchains;
@@ -63,6 +65,10 @@ void CBCToolChain::addClangTargetOptions(const ArgList &DriverArgs,
   CC1Args.push_back("-femulated-tls");
   CC1Args.push_back("-fno-jump-tables");
   CC1Args.push_back("-fno-common");
+  // Native shared libraries: dynsym APIs are opt-in (visibility("default")).
+  if (DriverArgs.hasArg(options::OPT_shared) &&
+      !DriverArgs.hasArg(options::OPT_fvisibility_EQ))
+    CC1Args.push_back("-fvisibility=hidden");
 }
 
 void CBCToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
@@ -126,6 +132,31 @@ void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   // so -lc++ finds bitcode libc++.a before any host libc++.so.
   CmdArgs.push_back("-L");
   CmdArgs.push_back(Args.MakeArgString(LibDir));
+  // Wrap (-shared) links -lcbcengine / -l:libcangjie-runtime.so; those live
+  // under CANGJIE_HOME. Inject before user -L so the SDK wins by default.
+  if (Args.hasArg(options::OPT_shared)) {
+    std::optional<std::string> CjHome =
+        llvm::sys::Process::GetEnv("CANGJIE_HOME");
+    if (!CjHome || CjHome->empty()) {
+      getToolChain().getDriver().Diag(diag::err_drv_cbc_missing_cangjie_home);
+      return;
+    }
+    SmallString<256> ToolsLib(*CjHome);
+    llvm::sys::path::append(ToolsLib, "tools", "lib");
+    CmdArgs.push_back("-L");
+    CmdArgs.push_back(Args.MakeArgString(ToolsLib));
+    const char *RuntimeSubdir = nullptr;
+    if (getToolChain().getTriple().isCBCHostX86_64())
+      RuntimeSubdir = "linux_x86_64_cjnative";
+    else if (getToolChain().getTriple().isCBCHostAArch64())
+      RuntimeSubdir = "linux_aarch64_cjnative";
+    if (RuntimeSubdir) {
+      SmallString<256> RuntimeLib(*CjHome);
+      llvm::sys::path::append(RuntimeLib, "runtime", "lib", RuntimeSubdir);
+      CmdArgs.push_back("-L");
+      CmdArgs.push_back(Args.MakeArgString(RuntimeLib));
+    }
+  }
   Args.addAllArgs(CmdArgs, {options::OPT_L});
   getToolChain().AddFilePathLibArgs(Args, CmdArgs);
 

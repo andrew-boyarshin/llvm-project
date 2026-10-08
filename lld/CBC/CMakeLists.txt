@@ -26,3 +26,7 @@ add_lld_library(lldCBC
   DEPENDS
   intrinsics_gen
 )
+
+# CBCTargetMachine (codegen export table) lives under llvm/lib/Target/CBC.
+target_include_directories(lldCBC PRIVATE
+  ${LLVM_MAIN_SRC_DIR}/lib/Target/CBC)
