@@ -35,6 +35,7 @@ required=(
   "$PREFIX/bin/ld.lld"
   "$PREFIX/lib/cbc/crt-cbc.bc"
   "$PREFIX/lib/cbc/cbc_can_catch_stub.bc"
+  "$PREFIX/lib/cbc/native/libcbc-main.a"
   "$PREFIX/lib/cbc/include/unwind.h"
   "$PREFIX/lib/cbc/include/c++/v1/__config_site"
   "$PREFIX/lib/cbc/lib/libc++.a"

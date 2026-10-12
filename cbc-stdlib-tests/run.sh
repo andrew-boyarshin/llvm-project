@@ -20,20 +20,21 @@ if [[ ! -x "$CLANG" || ! -x "$CLANGXX" ]]; then
   exit 1
 fi
 
-if [[ -z "${LAUNCHER:-}" ]] && ! command -v launcher >/dev/null 2>&1; then
+# CBC PIE executables need libcbcengine / libcangjie-runtime on the loader path.
+if [[ -z "${CANGJIE_HOME:-}" ]]; then
   if [[ -n "${ENVSETUP:-}" && -f "$ENVSETUP" ]]; then
     # shellcheck disable=SC1090
     source "$ENVSETUP"
   elif [[ -f /home/andrew/dev/hotfix-sdk/cangjie/envsetup.sh ]]; then
     # shellcheck disable=SC1091
     source /home/andrew/dev/hotfix-sdk/cangjie/envsetup.sh
+  elif [[ -f /home/user/Downloads/hotfix-sdk/cangjie/envsetup.sh ]]; then
+    # shellcheck disable=SC1091
+    source /home/user/Downloads/hotfix-sdk/cangjie/envsetup.sh
   fi
 fi
-if [[ -z "${LAUNCHER:-}" ]]; then
-  LAUNCHER="$(command -v launcher || true)"
-fi
-if [[ -z "$LAUNCHER" || ! -x "$LAUNCHER" ]]; then
-  echo "cbc-stdlib-tests: launcher not found; set LAUNCHER or ENVSETUP" >&2
+if [[ -z "${CANGJIE_HOME:-}" ]]; then
+  echo "cbc-stdlib-tests: CANGJIE_HOME not set; set ENVSETUP or source envsetup.sh" >&2
   exit 1
 fi
 
@@ -263,7 +264,7 @@ run_one() {
     flags=("${kept[@]}")
   fi
   log="$work/$name.log"
-  out="$work/$name.cbc"
+  out="$work/$name.out"
   if [[ "$name" == *.cpp ]]; then
     cc="$CLANGXX"
     if ! "$cc" --target="$TARGET" $CBC_FLAGS -std=c++20 "${flags[@]}" -o "$out" "$src" >"$log" 2>&1; then
@@ -281,7 +282,7 @@ run_one() {
     finish_result 0 "$name" "$torture" "empty output"
     return 1
   fi
-  if ! timeout 180 "$LAUNCHER" "$out" >"$log" 2>&1; then
+  if ! timeout 180 "$out" >"$log" 2>&1; then
     finish_result 0 "$name" "$torture" run "$log"
     return 1
   fi
@@ -373,15 +374,17 @@ int main(void) {
   return 0;
 }
 EOF
-if "$CLANG" --target="$TARGET" $CBC_FLAGS -o "$work/qsort.cbc" "$qsort_src" >"$work/qsort.log" 2>&1; then
-  echo "FAIL qsort.c expected a link error"
-  fail=1
-elif ! grep -q "not supported on CBC" "$work/qsort.log"; then
-  echo "FAIL qsort.c unexpected diagnostic"
+# Wrap + N2C stubs make qsort with a CBC comparator legal.
+if ! "$CLANG" --target="$TARGET" $CBC_FLAGS -o "$work/qsort.out" "$qsort_src" >"$work/qsort.log" 2>&1; then
+  echo "FAIL qsort.c expected to compile"
   tail -n 20 "$work/qsort.log"
   fail=1
+elif ! timeout 180 "$work/qsort.out" >"$work/qsort.run.log" 2>&1; then
+  echo "FAIL qsort.c run"
+  tail -n 20 "$work/qsort.run.log"
+  fail=1
 else
-  echo "PASS qsort.c rejected"
+  echo "PASS qsort.c"
 fi
 
 if ((fail != 0)); then

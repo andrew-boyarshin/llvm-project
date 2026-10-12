@@ -98,6 +98,22 @@ void __cbc_apply_image_relocs(char *img, unsigned *offs, i64 n, i64 base) {
   }
 }
 
+/* Copy len bytes from s into a fresh heap C string (NUL-terminated). */
+static char *__cbc_strndup(const char *s, i64 len) {
+  char *out;
+  i64 i;
+  out = (char *)malloc((u64)len + 1);
+  if (!out)
+    return 0;
+  i = 0;
+  while (i < len) {
+    out[i] = s[i];
+    i = i + 1;
+  }
+  out[len] = 0;
+  return out;
+}
+
 i32 __cbc_args(char ***argv_out) {
   char buf[4096];
   i32 fd = open("/proc/self/cmdline", 0);
@@ -111,6 +127,9 @@ i32 __cbc_args(char ***argv_out) {
   i64 argc;
   i64 start;
   i32 seen_cbc;
+  i32 keep_from;
+  i64 arg_i;
+  i64 first_keep;
   if (fd < 0) {
     char **empty = (char **)malloc(8);
     empty[0] = 0;
@@ -129,18 +148,13 @@ i32 __cbc_args(char ***argv_out) {
       parts = parts + 1;
     i = i + 1;
   }
-  bytes = 0;
-  k = 0;
-  need = parts + 1;
-  while (k < need) {
-    bytes = bytes + 8;
-    k = k + 1;
-  }
-  v = (char **)malloc(bytes);
-  argc = 0;
-  start = 0;
+  /* Launcher cmdline is `... launcher foo.cbc args...` — drop through the
+     .cbc/.so marker. Host PIE wrap has no marker: keep the full argv. */
   seen_cbc = 0;
+  start = 0;
   i = 0;
+  first_keep = 0;
+  arg_i = 0;
   while (i <= n) {
     if (i == n || buf[i] == 0) {
       char *s = buf + start;
@@ -152,12 +166,40 @@ i32 __cbc_args(char ***argv_out) {
       if (len >= 3 && s[len - 3] == '.' && s[len - 2] == 's' &&
           s[len - 1] == 'o')
         ends = 1;
-      if (seen_cbc) {
-        v[argc] = s;
+      if (ends) {
+        seen_cbc = 1;
+        first_keep = arg_i + 1;
+      }
+      arg_i = arg_i + 1;
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  keep_from = seen_cbc ? (i32)first_keep : 0;
+
+  bytes = 0;
+  k = 0;
+  need = parts + 1;
+  while (k < need) {
+    bytes = bytes + 8;
+    k = k + 1;
+  }
+  v = (char **)malloc(bytes);
+  argc = 0;
+  start = 0;
+  arg_i = 0;
+  i = 0;
+  while (i <= n) {
+    if (i == n || buf[i] == 0) {
+      char *s = buf + start;
+      i64 len = i - start;
+      /* Skip the phantom empty field after a trailing NUL in cmdline. */
+      if (arg_i >= keep_from && len > 0) {
+        /* Heap-copy: buf[] is stack-local and dies on return. */
+        v[argc] = __cbc_strndup(s, len);
         argc = argc + 1;
       }
-      if (ends)
-        seen_cbc = 1;
+      arg_i = arg_i + 1;
       start = i + 1;
     }
     i = i + 1;

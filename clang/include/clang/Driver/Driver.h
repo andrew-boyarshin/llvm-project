@@ -280,7 +280,7 @@ public:
   LLVM_PREFERRED_TYPE(bool)
   unsigned CCPrintInternalStats : 1;
 
-  /// True when -fcbc was passed; default image name becomes a.cbc.
+  /// True when -fcbc was passed (CBC bitcode / wrap ELF link).
   LLVM_PREFERRED_TYPE(bool)
   unsigned CBCMode : 1;
 

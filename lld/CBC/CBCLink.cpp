@@ -27,7 +27,6 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/SourceMgr.h"
@@ -213,8 +212,9 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
   if (SawCBC && !Composite->getModuleFlag(CBCModuleFlagKey))
     Composite->addModuleFlag(Module::Error, CBCModuleFlagKey, uint32_t(1));
   Composite->addModuleFlag(Module::Warning, "cbc-whole-program", uint32_t(1));
-  if (request.wrap)
-    Composite->addModuleFlag(Module::Warning, "cbc-wrap", uint32_t(1));
+  // All clang/lld CBC products are wrap (DSO or host PIE). N2C stubs make
+  // CBC callbacks legal for qsort/pthread_create/etc.
+  Composite->addModuleFlag(Module::Warning, "cbc-wrap", uint32_t(1));
   if (!request.aotDeps.empty()) {
     std::string Deps = request.aotDeps[0].str();
     for (size_t I = 1; I < request.aotDeps.size(); ++I) {
@@ -270,60 +270,17 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
       PB.buildPerModuleDefaultPipeline(OptimizationLevel::O2);
   MPM.run(*Composite, MAM);
 
-  // Native shared-library wrap: N2C stubs make CBC callbacks legal for
-  // qsort/pthread_create/etc. Keep pthread_atfork (fork, not attach) and the
-  // existing signal/sigaction async crt guard. Deprecated .cbc emit keeps
-  // today's checks.
+  // N2C stubs make CBC callbacks legal for qsort/pthread_create/etc. Keep
+  // rejecting pthread_atfork (fork, not attach) and the existing
+  // signal/sigaction async crt guard.
   bool Failed = false;
-  if (!request.wrap) {
-    static const char *Unsupported[] = {
-        "qsort", "qsort_r", "bsearch", "lfind", "lsearch", "tsearch", "tfind",
-        "tdelete", "twalk", "twalk_r", "tdestroy", "ftw", "nftw", "ftw64",
-        "nftw64", "pthread_create", "pthread_once", "pthread_atfork"};
-    for (Function &F : *Composite) {
-      if (!F.isDeclaration() || F.use_empty())
-        continue;
-      for (const char *Name : Unsupported) {
-        if (F.getName() == Name) {
-          error("'" + F.getName() +
-                "' is not supported on CBC: its callback would be called by "
-                "native code");
-          Failed = true;
-        }
-      }
-    }
-    for (Function &F : *Composite) {
-      for (BasicBlock &BB : F) {
-        for (Instruction &I : BB) {
-          auto *CB = dyn_cast<CallBase>(&I);
-          if (!CB)
-            continue;
-          const Function *Callee = CB->getCalledFunction();
-          if (!Callee || !Callee->isDeclaration())
-            continue;
-          for (const Use &U : CB->args()) {
-            const Value *V = U->stripPointerCasts();
-            const auto *AF = dyn_cast<Function>(V);
-            if (AF && !AF->isDeclaration()) {
-              error("passing CBC function '" + AF->getName() +
-                    "' to native function '" + Callee->getName() +
-                    "'; native code calling CBC code is not supported");
-              Failed = true;
-            }
-          }
-        }
-      }
-    }
-  } else {
-    // Shared-library link: still reject pthread_atfork (fork, not attach).
-    for (Function &F : *Composite) {
-      if (!F.isDeclaration() || F.use_empty())
-        continue;
-      if (F.getName() == "pthread_atfork") {
-        error("'pthread_atfork' is not supported on CBC: fork handlers are "
-              "not N2C-attached");
-        Failed = true;
-      }
+  for (Function &F : *Composite) {
+    if (!F.isDeclaration() || F.use_empty())
+      continue;
+    if (F.getName() == "pthread_atfork") {
+      error("'pthread_atfork' is not supported on CBC: fork handlers are "
+            "not N2C-attached");
+      Failed = true;
     }
   }
   if (Failed)
@@ -355,10 +312,10 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
       CBCTakeExportsFromTargetMachine(*TM);
   out.exports.clear();
   for (const llvm::CBCExport &E : CodegenExports) {
-    // N2C stubs (wrap only) hardcode cpStackSize=0, so stubbed exports' Params
-    // must fit the host register file. Container .cbc emit has no N2C stubs.
-    // MaxCalleeStackArgs is outgoing call stack slots, not this prototype.
-    bool NeedsN2CStub = request.wrap && (E.DefaultVis || E.AddressTaken);
+    // N2C stubs hardcode cpStackSize=0, so stubbed exports' Params must fit
+    // the host register file. MaxCalleeStackArgs is outgoing call stack
+    // slots, not this prototype.
+    bool NeedsN2CStub = E.DefaultVis || E.AddressTaken;
     if (NeedsN2CStub && E.VarArg) {
       error("CBC native shared library: varargs export '" + E.Name +
             "' is not supported");
@@ -389,22 +346,4 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
     out.exports.push_back(std::move(OutE));
   }
   return errorCount() == 0;
-}
-
-bool cbc::link(const CBCLinkRequest &request) {
-  CBCLinkResult Result;
-  if (!linkToMemory(request, Result))
-    return false;
-  if (request.outputPath.empty()) {
-    error("CBC link requires an output path");
-    return false;
-  }
-  std::error_code EC;
-  raw_fd_ostream Out(request.outputPath, EC, sys::fs::OF_None);
-  if (EC) {
-    error(EC.message());
-    return false;
-  }
-  Out.write(Result.bytes.data(), Result.bytes.size());
-  return !Out.has_error() && errorCount() == 0;
 }

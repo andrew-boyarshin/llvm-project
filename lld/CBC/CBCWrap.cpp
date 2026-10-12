@@ -4,9 +4,10 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Host-triple wrap of a finished .cbc: blob + N2C stubs + DSO ctor that calls
-// engine_load_buffer. Native -shared link is deferred until after the CBC
-// CommonLinkerContext is destroyed (see lld/Common/DriverDispatcher.cpp).
+// Host-triple wrap of a finished .cbc: blob + N2C stubs + either a DSO
+// .init_array ctor or an explicit __cbc_embed_load for host PIE (libcbc-main).
+// Native link is deferred until after the CBC CommonLinkerContext is destroyed
+// (see lld/Common/DriverDispatcher.cpp).
 //
 //===----------------------------------------------------------------------===//
 
@@ -55,6 +56,15 @@ Triple hostTripleFromCBC(const Triple &CBC) {
 bool isAlwaysHiddenExport(StringRef Name) {
   return Name == "main" || Name == "__cbc_main" || Name == "__cbc_entry" ||
          Name == "__cbc_lib_start";
+}
+
+/// ELF symbol for an N2C stub. Executable wrap must not define ELF `main`
+/// (that comes from libcbc-main); keep bytecode method name `main` for
+/// FindMain and use `__cbc_entry` as the stub symbol.
+StringRef elfStubName(StringRef ExportName, bool ForExecutable) {
+  if (ForExecutable && ExportName == "main")
+    return "__cbc_entry";
+  return ExportName;
 }
 
 FunctionType *exportFunctionType(LLVMContext &Ctx, const cbc::CBCExport &E) {
@@ -119,25 +129,31 @@ void appendAArch64Stub(raw_ostream &OS, StringRef Name, unsigned Index,
 }
 
 std::string buildStubModuleAsm(const Triple &Host,
-                               ArrayRef<cbc::CBCExport> Exports) {
+                               ArrayRef<cbc::CBCExport> Exports,
+                               bool ForExecutable) {
   std::string Asm;
   raw_string_ostream OS(Asm);
   bool IsAArch64 = Host.isAArch64();
   for (unsigned I = 0, E = Exports.size(); I != E; ++I) {
     const cbc::CBCExport &Ex = Exports[I];
+    StringRef Stub = elfStubName(Ex.name, ForExecutable);
     bool Hidden =
         isAlwaysHiddenExport(Ex.name) || !(Ex.defaultVis || Ex.addressTaken);
     if (IsAArch64)
-      appendAArch64Stub(OS, Ex.name, I, Hidden);
+      appendAArch64Stub(OS, Stub, I, Hidden);
     else
-      appendX86Stub(OS, Ex.name, I, Hidden);
+      appendX86Stub(OS, Stub, I, Hidden);
   }
   OS.flush();
   return Asm;
 }
 
+/// Build the wrap module. When \p ForExecutable is true, omit .init_array
+/// (libcbc-main calls __cbc_embed_load after InitCJRuntime) and rename the
+/// ELF stub for CBC method `main` to `__cbc_entry`.
 std::unique_ptr<Module> buildWrapModule(LLVMContext &Ctx,
-                                        const cbc::CBCLinkResult &Result) {
+                                        const cbc::CBCLinkResult &Result,
+                                        bool ForExecutable) {
   auto M = std::make_unique<Module>("cbc-wrap", Ctx);
   Triple Host = hostTripleFromCBC(Result.triple);
   M->setTargetTriple(Host);
@@ -178,8 +194,9 @@ std::unique_ptr<Module> buildWrapModule(LLVMContext &Ctx,
   SmallVector<Constant *, 8> InfoElts;
   for (unsigned I = 0; I < N; ++I) {
     const cbc::CBCExport &E = Result.exports[I];
+    StringRef Stub = elfStubName(E.name, ForExecutable);
     Function *Decl = Function::Create(exportFunctionType(Ctx, E),
-                                      GlobalValue::ExternalLinkage, E.name, *M);
+                                      GlobalValue::ExternalLinkage, Stub, *M);
     bool Hidden =
         isAlwaysHiddenExport(E.name) || !(E.defaultVis || E.addressTaken);
     Decl->setVisibility(Hidden ? GlobalValue::HiddenVisibility
@@ -195,7 +212,8 @@ std::unique_ptr<Module> buildWrapModule(LLVMContext &Ctx,
                                    "__cbc_exported_infos");
   Infos->setAlignment(Align(8));
 
-  M->appendModuleInlineAsm(buildStubModuleAsm(Host, Result.exports));
+  M->appendModuleInlineAsm(
+      buildStubModuleAsm(Host, Result.exports, ForExecutable));
 
   StructType *DlInfoTy =
       StructType::create(Ctx, {I8Ptr, I8Ptr, I8Ptr, I8Ptr}, "struct.Dl_info");
@@ -205,19 +223,22 @@ std::unique_ptr<Module> buildWrapModule(LLVMContext &Ctx,
       FunctionType::get(I32, {I8Ptr, PointerType::getUnqual(Ctx)}, false));
   FunctionCallee Realpath = M->getOrInsertFunction(
       "realpath", FunctionType::get(I8Ptr, {I8Ptr, I8Ptr}, false));
+  FunctionCallee SetMainCbc = M->getOrInsertFunction(
+      "engine_set_main_cbc", FunctionType::get(Void, {I8Ptr}, false));
   FunctionCallee LoadBuffer = M->getOrInsertFunction(
       "engine_load_buffer",
       FunctionType::get(I32, {I8Ptr, I64, I8Ptr, I32, I8Ptr, I8Ptr}, false));
 
-  Function *InitFn = Function::Create(FunctionType::get(Void, false),
-                                      GlobalValue::InternalLinkage,
-                                      "__cbc_lib_init", *M);
-  BasicBlock *BB = BasicBlock::Create(Ctx, "entry", InitFn);
+  // Global so libcbc-main can call it; DSO also registers it in .init_array.
+  Function *EmbedLoad = Function::Create(FunctionType::get(Void, false),
+                                         GlobalValue::ExternalLinkage,
+                                         "__cbc_embed_load", *M);
+  BasicBlock *BB = BasicBlock::Create(Ctx, "entry", EmbedLoad);
   IRBuilder<> B(BB);
 
   AllocaInst *Info = B.CreateAlloca(DlInfoTy, nullptr, "info");
-  Value *InitPtr = InitFn;
-  B.CreateCall(Dladdr, {InitPtr, Info});
+  Value *EmbedPtr = EmbedLoad;
+  B.CreateCall(Dladdr, {EmbedPtr, Info});
   Value *FnamePtr = B.CreateStructGEP(DlInfoTy, Info, 0);
   Value *Fname = B.CreateLoad(I8Ptr, FnamePtr, "dli_fname");
   Value *Resolved = B.CreateCall(
@@ -227,20 +248,25 @@ std::unique_ptr<Module> buildWrapModule(LLVMContext &Ctx,
       Resolved, ConstantPointerNull::get(cast<PointerType>(I8Ptr)));
   Value *Path = B.CreateSelect(IsNull, Fname, Resolved, "load.name");
 
+  // Same path string for FindMain and engine_load_buffer identity.
+  B.CreateCall(SetMainCbc, {Path});
+
   Value *BlobPtr = Blob;
   Value *Len = ConstantInt::get(I64, Result.bytes.size());
   Value *Count = ConstantInt::get(I32, N);
   B.CreateCall(LoadBuffer, {BlobPtr, Len, Path, Count, Infos, Handles});
   B.CreateRetVoid();
 
-  // Emit into .init_array directly. Host codegen of llvm.global_ctors into a
-  // bare .o (no crt begin/end) left an empty .ctors and no DT_INIT_ARRAY, so
-  // dlopen never ran the wrap ctor.
-  auto *InitArrEnt = new GlobalVariable(
-      *M, PointerType::getUnqual(Ctx), /*isConstant=*/false,
-      GlobalValue::InternalLinkage, InitFn, "__cbc_lib_init.ptr");
-  InitArrEnt->setSection(".init_array");
-  InitArrEnt->setAlignment(Align(8));
+  if (!ForExecutable) {
+    // Emit into .init_array directly. Host codegen of llvm.global_ctors into a
+    // bare .o (no crt begin/end) left an empty .ctors and no DT_INIT_ARRAY, so
+    // dlopen never ran the wrap ctor.
+    auto *InitArrEnt = new GlobalVariable(
+        *M, PointerType::getUnqual(Ctx), /*isConstant=*/false,
+        GlobalValue::InternalLinkage, EmbedLoad, "__cbc_embed_load.ptr");
+    InitArrEnt->setSection(".init_array");
+    InitArrEnt->setAlignment(Align(8));
+  }
 
   return M;
 }
@@ -272,6 +298,46 @@ bool codegenWrapObject(Module &M, const Triple &Host,
   return errorCount() == 0;
 }
 
+bool writeTempObject(ArrayRef<char> ObjBuf, SmallString<256> &TmpPath) {
+  int FD = -1;
+  if (std::error_code EC =
+          sys::fs::createTemporaryFile("cbc-wrap", "o", FD, TmpPath)) {
+    error("CBC wrap: cannot create temp object: " + EC.message());
+    return false;
+  }
+  raw_fd_ostream FOS(FD, /*shouldClose=*/true);
+  FOS.write(ObjBuf.data(), ObjBuf.size());
+  return !FOS.has_error();
+}
+
+void appendAotDeps(SmallVectorImpl<std::string> &Storage,
+                   ArrayRef<std::string> AotDeps) {
+  auto push = [&](Twine S) { Storage.emplace_back(S.str()); };
+  for (const std::string &Dep : AotDeps) {
+    if (StringRef(Dep).starts_with("lib") && StringRef(Dep).contains(".so"))
+      push(Twine("-l:") + Dep);
+    else {
+      push("-l");
+      push(Dep);
+    }
+  }
+}
+
+/// Absolute path to host clang next to this ld.lld binary.
+std::string findSiblingClang() {
+  // MainExecAddr lets Linux resolve via /proc/self/exe when argv0 is absent.
+  std::string Self =
+      sys::fs::getMainExecutable(/*Argv0=*/nullptr, (void *)&findSiblingClang);
+  if (Self.empty())
+    return {};
+  SmallString<256> Clang(Self);
+  sys::path::remove_filename(Clang);
+  sys::path::append(Clang, "clang");
+  if (sys::fs::can_execute(Clang))
+    return std::string(Clang);
+  return {};
+}
+
 } // namespace
 
 namespace lld {
@@ -285,7 +351,8 @@ bool emitSharedWrap(StringRef outputPath, const CBCLinkResult &result,
   }
 
   LLVMContext Ctx;
-  std::unique_ptr<Module> M = buildWrapModule(Ctx, result);
+  std::unique_ptr<Module> M =
+      buildWrapModule(Ctx, result, /*ForExecutable=*/false);
   if (!M)
     return false;
   Triple Host = hostTripleFromCBC(result.triple);
@@ -295,16 +362,8 @@ bool emitSharedWrap(StringRef outputPath, const CBCLinkResult &result,
     return false;
 
   SmallString<256> TmpPath;
-  int FD = -1;
-  if (std::error_code EC =
-          sys::fs::createTemporaryFile("cbc-wrap", "o", FD, TmpPath)) {
-    error("CBC wrap: cannot create temp object: " + EC.message());
+  if (!writeTempObject(ObjBuf, TmpPath))
     return false;
-  }
-  {
-    raw_fd_ostream FOS(FD, /*shouldClose=*/true);
-    FOS.write(ObjBuf.data(), ObjBuf.size());
-  }
 
   SmallVector<std::string, 32> Storage;
   auto push = [&](Twine S) { Storage.emplace_back(S.str()); };
@@ -313,7 +372,6 @@ bool emitSharedWrap(StringRef outputPath, const CBCLinkResult &result,
   push("-o");
   push(outputPath);
   push(TmpPath);
-  // -L from the CBC link (user -L and toolchain FilePaths).
   for (StringRef Dir : hostSearchPaths) {
     if (Dir.empty())
       continue;
@@ -323,19 +381,68 @@ bool emitSharedWrap(StringRef outputPath, const CBCLinkResult &result,
   push("-lcbcengine");
   push("-l:libcangjie-runtime.so");
   push("-ldl");
-  for (const std::string &Dep : result.aotDeps) {
-    if (StringRef(Dep).starts_with("lib") && StringRef(Dep).contains(".so"))
-      push(Twine("-l:") + Dep);
-    else {
-      push("-l");
-      push(Dep);
-    }
-  }
+  appendAotDeps(Storage, result.aotDeps);
 
   SmallVector<const char *, 32> Argv;
   for (const std::string &S : Storage)
     Argv.push_back(S.c_str());
   setDeferredNativeLink(Argv, TmpPath);
+  return true;
+}
+
+bool emitExecutableWrap(StringRef outputPath, const CBCLinkResult &result,
+                        ArrayRef<StringRef> hostSearchPaths) {
+  if (result.bytes.empty()) {
+    error("CBC wrap: empty CBC payload");
+    return false;
+  }
+
+  std::string Clang = findSiblingClang();
+  if (Clang.empty()) {
+    error("CBC wrap: cannot find host clang next to ld.lld");
+    return false;
+  }
+
+  LLVMContext Ctx;
+  std::unique_ptr<Module> M =
+      buildWrapModule(Ctx, result, /*ForExecutable=*/true);
+  if (!M)
+    return false;
+  Triple Host = hostTripleFromCBC(result.triple);
+
+  SmallVector<char, 0> ObjBuf;
+  if (!codegenWrapObject(*M, Host, ObjBuf))
+    return false;
+
+  SmallString<256> TmpPath;
+  if (!writeTempObject(ObjBuf, TmpPath))
+    return false;
+
+  SmallVector<std::string, 48> Storage;
+  auto push = [&](Twine S) { Storage.emplace_back(S.str()); };
+  push(Clang);
+  push("-pie");
+  push("-rdynamic");
+  push("-o");
+  push(outputPath);
+  push(TmpPath);
+  for (StringRef Dir : hostSearchPaths) {
+    if (Dir.empty())
+      continue;
+    push("-L");
+    push(Dir);
+  }
+  // -lcbc-main only on this deferred host link (never on ld.lld --cbc).
+  push("-lcbc-main");
+  push("-lcbcengine");
+  push("-l:libcangjie-runtime.so");
+  push("-ldl");
+  appendAotDeps(Storage, result.aotDeps);
+
+  SmallVector<const char *, 48> Argv;
+  for (const std::string &S : Storage)
+    Argv.push_back(S.c_str());
+  setDeferredExternalLink(Argv, TmpPath);
   return true;
 }
 

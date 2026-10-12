@@ -37,45 +37,45 @@ Stubs are ordinary host LLVM functions whose bodies are inline assembly
 
 ## 0. Goal
 
-After `24`, `ld.lld --cbc -o a.cbc` produces a CBC container the launcher
-loads. This work makes the **same** `--cbc` invocation produce a **host
-artifact** when the output name is not `.cbc`:
+**Update (standalone `.cbc` removed):** clang/lld no longer write a
+launcher `.cbc` file. CBC bytes live only in-memory inside a wrap ELF:
 
 ```
-ld.lld --cbc -o a.cbc              →  CBC container          (today, 24)
+ld.lld --cbc -o a.out              →  host PIE (+ libcbc-main; requires main)
+ld.lld --cbc -shared -o libfoo.so  →  ELF DSO (.init_array loads blob)
+ld.lld --cbc -o foo.cbc            →  error
+```
+
+Historical text below described the earlier container product; treat the
+table in §2 as superseded by the wrap-only products above.
+
+```
 ld.lld --cbc -shared -o libfoo.so
 ld.lld --cbc -dylib  -o libfoo.dylib
 ld.lld --cbc --lto-emit-llvm -o libfoo.bc
 ld.lld --cbc -r -o foo.o
                                →  host ELF / Mach-O / bitcode / relocatable
                                   with the .cbc as a byte array,
-                                  a constructor that loads it,
+                                  a constructor (DSO) or libcbc-main (PIE),
                                   and native stubs for exports
 ```
 
-There is **no** user-visible wrap tool, no second `ld.lld` process, and no
-`cbc-wrap`. Clang still calls `ld.lld --cbc` (or `ld64.lld --cbc`). The
-linker decides the product from `-o` plus the ordinary host flags
-(`-shared`, `-dylib`, `-r`, `--lto-emit-llvm`).
+There is **no** user-visible wrap tool. Clang still calls `ld.lld --cbc`.
+The linker decides DSO vs PIE from `-shared` / `*.so` vs everything else.
 
-**Runnable by the launcher** (§4.1): `.cbc` and ELF/Mach-O **shared
-libraries** only (`launcher a.cbc` or `launcher libfoo.so`). Host bitcode
-(`.bc`), static archives (`.a`), and relocatables (`-r`) are packaging /
-LTO inputs — the existing launcher does not run them. **Host executable**
-wrap (`-o a.out` without `-shared`) remains out of scope; use `.cbc` or a
-DSO.
+**Runnable:** host PIE (`./a.out`) directly; ELF DSOs via `launcher
+libfoo.so` or `dlopen`. Host bitcode (`.bc`), static archives (`.a`), and
+relocatables (`-r`) are packaging / LTO inputs.
 
 Success:
 
-1. Every program that links to `a.cbc` today still does, byte-compatible
-   with `24`.
+1. `clang -fcbc foo.c` produces a host PIE that runs CBC `main`.
 2. `clang --target=x86_64-unknown-linux-gnu -fcbc -shared -o libfoo.so …`
    produces an ELF DSO whose `.cbc` payload loads on first use of the DSO,
    and whose default-visibility / address-taken functions are C-ABI symbols
    native code can call.
-3. If that DSO’s CBC image has a `main`, `launcher libfoo.so …` runs it the
-   same way as `launcher a.cbc` (§4.1) — no exported “run main” symbol, no
-   host `main` shim.
+3. If that DSO’s CBC image has a `main`, `launcher libfoo.so …` runs it
+   via `FindMain` — no exported “run main” symbol from the DSO.
 4. The same wrap module as a static archive of host bitcode (or
    `--lto-emit-llvm`) is **LLVM LTO-ready**: unused stubs are IR functions
    and die under internalization + GlobalDCE.
@@ -115,21 +115,20 @@ Do **not** add `--oformat=cbc`. `OUTPUT_FORMAT(elf64-x86-64)` inside
 
 `--cbc` is set. Then:
 
-| `-o` name | Other flags | Product | Launcher |
+| `-o` name | Other flags | Product | How to run |
 |---|---|---|---|
-| `*.cbc`, or `-o` omitted (default `a.cbc`) | | CBC container (`24` P13). Host flags `-shared`/`-r` are errors. | `launcher a.cbc` |
+| `*.cbc` | | **Error** — standalone `.cbc` emit removed | — |
 | `*.bc` or `*.ll`, or `--lto-emit-llvm` | | Host-triple LLVM bitcode of the wrapper. Static-lib LTO input. | no |
-| `*.so`, or `-shared` | ELF driver | ELF DSO. `.so` without `-shared` implies `-shared` (warn once). | `launcher lib.so` (§4.1) |
+| `*.so`, or `-shared` | ELF driver | ELF DSO. `.so` without `-shared` implies `-shared` (warn once). | `launcher lib.so` / `dlopen` |
 | `*.dylib` / `*.tbd` output, or `-dylib` | Mach-O driver | Mach-O dylib. | later (`dlopen`) |
-| `*.a` | | `llvm-ar` of one host bitcode member (LTO-ready static lib). A thin archive of a single relocatable is acceptable if bitcode emit is off. | no |
+| `*.a` | | `llvm-ar` of one host bitcode member (LTO-ready static lib). | no |
 | `*.o` / `*.obj`, or `-r` | | Host relocatable. | no |
-| anything else (`a.out`, no extension, `*.exe`) | | **Error** in v1. No host-executable wrap; use `.cbc` or `-shared`. | — |
+| anything else (`a.out`, no extension, `*.exe`) | requires `main` | Host PIE + `libcbc-main` | `./a.out` |
 
 The CBC bytes are always produced first. The wrap is a function of the
 output kind, not a different IR-link.
 
-Default `-o` in `--cbc` remains `a.cbc`, so existing tests and `clang` jobs
-that omit `-o` do not silently start emitting ELF.
+Default `-o` in `--cbc` is `a.out` (host PIE).
 
 ## 3. Pipeline (one `ld.lld --cbc` process)
 

@@ -91,7 +91,8 @@ defm split_stack_adjust_size
 
 def O: JoinedOrSeparate<["-"], "O">, HelpText<"Optimize output file size">;
 
-def cbc: FF<"cbc">, HelpText<"Write a CBC image instead of ELF">;
+def cbc: FF<"cbc">,
+  HelpText<"Link CBC bitcode into a host ELF shared library or executable">;
 defm crt: EEq<"crt", "Bitcode runtime linked whole first">;
 def no_native_validation: FF<"no-native-validation">,
   HelpText<"Accepted and ignored (native dynsym validation is not implemented)">;

@@ -2220,7 +2220,7 @@ static void setConfigs(Ctx &ctx, opt::InputArgList &args) {
   if (ctx.arg.entry.empty() && !ctx.arg.relocatable)
     ctx.arg.entry = ctx.arg.emachine == EM_MIPS ? "__start" : "_start";
   if (ctx.arg.outputFile.empty())
-    ctx.arg.outputFile = ctx.arg.cbcMode ? "a.cbc" : "a.out";
+    ctx.arg.outputFile = "a.out";
 
 }
 
@@ -3455,9 +3455,9 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
     }
   }
 
-  // CBC mode: resolve inputs with ELF machinery, then emit a .cbc (or wrap)
-  // and skip LTO / Writer on CBC IR. Must not reuse skipLinkedOutput (that
-  // still runs LTO).
+  // CBC mode: resolve inputs with ELF machinery, then wrap as a host ELF DSO
+  // or PIE executable (CBC bytes stay in-memory only). Skip LTO / Writer on
+  // CBC IR. Must not reuse skipLinkedOutput (that still runs LTO).
   if (ctx.arg.cbcMode) {
     if (errCount(ctx))
       return;
@@ -3472,36 +3472,35 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
     req.aotDeps = aotDeps;
     req.outputPath = ctx.arg.outputFile;
     req.triple = triple;
+    req.wrap = true;
 
     StringRef OutName = ctx.arg.outputFile;
+    if (OutName.ends_with(".cbc")) {
+      Err(ctx) << "CBC: standalone .cbc output is not supported; use "
+                  "-shared -o lib.so or -o a.out";
+      return;
+    }
     bool WantShared = ctx.arg.shared || OutName.ends_with(".so");
     if (OutName.ends_with(".so") && !ctx.arg.shared)
       Warn(ctx) << "CBC: producing a shared library because output ends in "
                    ".so; pass -shared explicitly";
-    if (WantShared && OutName.ends_with(".cbc")) {
-      Err(ctx) << "CBC: -shared with a .cbc output is not supported";
-      return;
-    }
-    bool IsContainer = OutName.empty() || OutName.ends_with(".cbc") ||
-                       (!WantShared && !OutName.ends_with(".so"));
-    // Host executable wrap is out of scope.
-    if (!IsContainer && !WantShared) {
-      Err(ctx) << "CBC: host executable wrap is not supported; use .cbc or "
-                  "-shared -o lib.so";
-      return;
-    }
-    req.wrap = !IsContainer;
-
-    if (IsContainer) {
-      cbc::link(req);
-      return;
-    }
 
     cbc::CBCLinkResult Result;
     if (!cbc::linkToMemory(req, Result))
       return;
-    if (!cbc::emitSharedWrap(ctx.arg.outputFile, Result, ctx.arg.searchPaths))
-      return;
+    if (WantShared) {
+      if (!cbc::emitSharedWrap(ctx.arg.outputFile, Result, ctx.arg.searchPaths))
+        return;
+    } else {
+      if (!Result.hasMain) {
+        Err(ctx) << "CBC: executable output requires a main function; "
+                    "use -shared for a library";
+        return;
+      }
+      if (!cbc::emitExecutableWrap(ctx.arg.outputFile, Result,
+                                   ctx.arg.searchPaths))
+        return;
+    }
     return;
   }
 

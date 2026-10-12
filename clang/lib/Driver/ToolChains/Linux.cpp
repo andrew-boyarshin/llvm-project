@@ -575,9 +575,8 @@ void Linux::addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
     CC1Args.push_back("-fcbc");
     CC1Args.push_back("-femulated-tls");
     CC1Args.push_back("-fno-common");
-    // Native shared libraries: dynsym APIs are opt-in (visibility("default")).
-    if (DriverArgs.hasArg(options::OPT_shared) &&
-        !DriverArgs.hasArg(options::OPT_fvisibility_EQ))
+    // Dynsym APIs are opt-in (visibility("default")) for both DSO and PIE wrap.
+    if (!DriverArgs.hasArg(options::OPT_fvisibility_EQ))
       CC1Args.push_back("-fvisibility=hidden");
   }
   llvm::Triple Triple(ComputeEffectiveClangTriple(DriverArgs));

@@ -20,6 +20,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/Program.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 #include <cstdlib>
@@ -171,31 +172,51 @@ int unsafeLldMain(llvm::ArrayRef<const char *> args,
   // (nested CommonLinkerContext is a no-op while the first Ctx is live).
   CommonLinkerContext::destroy();
 
-  // CBC wrap: re-enter a fresh ELF -shared link after CBC Ctx is gone.
-  // This must run before exitEarly's exitLld, or wrap products never emit.
+  // CBC wrap: after CBC Ctx is gone, either re-enter ELF -shared (DSO) or
+  // spawn host clang for a PIE executable. Must run before exitEarly's
+  // exitLld, or wrap products never emit.
   {
     SmallVector<const char *, 32> Deferred;
     std::string TmpObj;
-    if (takeDeferredNativeLink(Deferred, TmpObj) && !Deferred.empty()) {
-      Driver ElfDriver = nullptr;
-      for (DriverDef Def : drivers) {
-        if (Def.f == lld::Gnu) {
-          ElfDriver = Def.d;
-          break;
+    bool External = false;
+    if (takeDeferredNativeLink(Deferred, TmpObj, External) &&
+        !Deferred.empty()) {
+      int WrapR = 0;
+      if (External) {
+        SmallVector<StringRef, 32> Args;
+        for (const char *A : Deferred)
+          Args.push_back(A);
+        std::string ErrMsg;
+        WrapR = sys::ExecuteAndWait(Args[0], Args, std::nullopt, {}, 0, 0,
+                                    &ErrMsg);
+        if (WrapR < 0) {
+          err("CBC wrap: failed to run host linker: " + ErrMsg);
+          WrapR = 1;
+        } else if (WrapR > 0) {
+          WrapR = 1;
+        }
+      } else {
+        Driver ElfDriver = nullptr;
+        for (DriverDef Def : drivers) {
+          if (Def.f == lld::Gnu) {
+            ElfDriver = Def.d;
+            break;
+          }
+        }
+        if (ElfDriver) {
+          // exitEarly=false so we can remove the temp object and return status.
+          WrapR = !ElfDriver(Deferred, stdoutOS, stderrOS,
+                             /*exitEarly=*/false, inTestOutputDisabled);
+          CommonLinkerContext::destroy();
+        } else {
+          err("CBC wrap: ELF driver not available for deferred -shared link");
+          WrapR = 1;
         }
       }
-      if (ElfDriver) {
-        // exitEarly=false so we can remove the temp object and return status.
-        int WrapR = !ElfDriver(Deferred, stdoutOS, stderrOS,
-                               /*exitEarly=*/false, inTestOutputDisabled);
-        if (!TmpObj.empty())
-          fs::remove(TmpObj);
-        CommonLinkerContext::destroy();
-        if (WrapR)
-          r = WrapR;
-      } else if (!TmpObj.empty()) {
+      if (!TmpObj.empty())
         fs::remove(TmpObj);
-      }
+      if (WrapR)
+        r = WrapR;
     }
   }
 

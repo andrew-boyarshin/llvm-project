@@ -53,26 +53,24 @@ is two stages** (§9): **26a** host triple + `-fcbc` without `cbc_native`;
 
 ## 1. What is already decided (`25`) and what this adds
 
-`25` already specifies the product table (container, DSO, or packaging
-wrap; no host-executable wrap):
+`25` product table (updated: standalone `.cbc` removed):
 
 ```
-ld.lld --cbc -o a.cbc              →  CBC container
+ld.lld --cbc -o a.out              →  host PIE (+ libcbc-main; requires main)
 ld.lld --cbc -shared -o libfoo.so  →  ELF DSO, .cbc embedded
+ld.lld --cbc -o foo.cbc            →  error
 ld.lld --cbc --lto-emit-llvm -o x.bc
 ld.lld --cbc -r -o foo.o           →  host bitcode / relocatable wrap
 ```
 
-**Runnable:** `launcher a.cbc` or `launcher libfoo.so` (`25` §4.1: ELF sniff →
-`dlopen` → ctor `load_buffer` → existing `FindMain` trampoline). `.bc` /
-`.a` / `-r` are not launcher inputs. No exported “run main” symbol, no host
-`main` shim.
+**Runnable:** `./a.out` (PIE), or `launcher libfoo.so` for DSOs (`25` §4.1:
+ELF sniff → `dlopen` → ctor `load_buffer` → `FindMain`). `.bc` / `.a` /
+`-r` are not launcher inputs.
 
-`--cbc` remains required (`24` §6.1). The extension / `-shared` is consulted
-only after that flag. Default `-o` stays `a.cbc`.
+`--cbc` remains required (`24` §6.1). Default `-o` is `a.out`.
 
-This document does **not** reopen that table. `24` §11 and `25` already
-invoke clang as `--target=x86_64-unknown-linux-gnu -fcbc`. This file adds:
+`24` §11 and `25` already invoke clang as
+`--target=x86_64-unknown-linux-gnu -fcbc`. This file adds:
 
 * the clang overlay that makes that spelling real (`TargetInfo`, `-fcbc`,
   module flag) and drops the `cbc_*` architecture;
@@ -96,24 +94,17 @@ A flag (`--cbc-emit=wrap`) is clearer in isolation. It is worse in the driver:
   `libm.so` scripts (`24`, `25` §1).
 * Users already think in artifacts: “I asked for `libfoo.so`.”
 
-Con: `ld.lld --cbc -o foo` (no extension) is an **error** in `25` v1 (not
-a host executable). Mitigation: default `a.cbc`; require `-shared` / `*.so`
-for wrap.
-
 ### 2.2 Edge cases
 
 | Input | Product | Note |
 |---|---|---|
-| `-o a.cbc` plus `-shared` | **Error** | Container has no SONAME / DT_NEEDED story; `25` already errors host flags on `.cbc`. |
+| `-o a.cbc` (any flags) | **Error** | Standalone `.cbc` emit removed. |
 | `-o libfoo.so` without `-shared` | DSO (warn once) | `25`. |
-| `-o -` / `/dev/stdout` | Container if `--cbc` and no `-shared`; else error | Do not sniff a non-file. |
 | `-o libfoo.so.1` | Host DSO | Real SONAMEs rarely end in `.cbc`. |
-| `-o foo.CBC` | Host wrap if `-shared` / etc.; else error | Match `.cbc` case-sensitively (Unix). |
 | `*.a` / `*.bc` / `-r` | Packaging wrap | Not launcher-runnable (`25` §2). |
-| `a.out` / `*.exe` (no `-shared`) | **Error** | No host-executable wrap. |
+| `a.out` / no extension (no `-shared`) | Host PIE | Requires `main`; links `libcbc-main`. |
 | Response files, `--end-lib` | Irrelevant | Decision is the driver’s `-o`, not input names. |
-| `cbc_native` definitions + `-o *.cbc` | **Error** | §6.3; use `-shared` (or other host wrap). |
-| Native ET_REL `.o` on the command line | **Error** (unchanged) | Wrap objects are synthesized inside lld; mixing precompiled ELF is a later product. |
+| Native ET_REL `.o` on the command line | **Error** (unchanged) | Wrap objects are synthesized inside lld. |
 
 ### 2.3 Pros / cons of folding wrap into `lld --cbc`
 

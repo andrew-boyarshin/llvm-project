@@ -35,35 +35,38 @@ void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   llvm::sys::path::append(CbcLib, "..", "lib", "cbc");
   SmallString<256> LibDir(CbcLib);
   llvm::sys::path::append(LibDir, "lib");
+  SmallString<256> NativeDir(CbcLib);
+  llvm::sys::path::append(NativeDir, "native");
   // -L before -l: ELF lld resolves libraries in argv order. CBC lib first
   // so -lc++ finds bitcode libc++.a before any host libc++.so.
   CmdArgs.push_back("-L");
   CmdArgs.push_back(Args.MakeArgString(LibDir));
-  // Wrap (-shared) links -lcbcengine / -l:libcangjie-runtime.so; those live
-  // under CANGJIE_HOME. Inject before user -L so the SDK wins by default.
-  if (Args.hasArg(options::OPT_shared)) {
-    std::optional<std::string> CjHome =
-        llvm::sys::Process::GetEnv("CANGJIE_HOME");
-    if (!CjHome || CjHome->empty()) {
-      getToolChain().getDriver().Diag(diag::err_drv_cbc_missing_cangjie_home);
-      return;
-    }
-    SmallString<256> ToolsLib(*CjHome);
-    llvm::sys::path::append(ToolsLib, "tools", "lib");
+  // Host PIE deferred link finds libcbc-main.a here (never pass -lcbc-main
+  // on the --cbc argv; that would look for bitcode).
+  CmdArgs.push_back("-L");
+  CmdArgs.push_back(Args.MakeArgString(NativeDir));
+  // Both DSO and PIE wrap need -lcbcengine / libcangjie-runtime; inject
+  // CANGJIE_HOME before user -L so the SDK wins by default.
+  std::optional<std::string> CjHome = llvm::sys::Process::GetEnv("CANGJIE_HOME");
+  if (!CjHome || CjHome->empty()) {
+    getToolChain().getDriver().Diag(diag::err_drv_cbc_missing_cangjie_home);
+    return;
+  }
+  SmallString<256> ToolsLib(*CjHome);
+  llvm::sys::path::append(ToolsLib, "tools", "lib");
+  CmdArgs.push_back("-L");
+  CmdArgs.push_back(Args.MakeArgString(ToolsLib));
+  const char *RuntimeSubdir = nullptr;
+  const llvm::Triple &TT = getToolChain().getTriple();
+  if (TT.getArch() == llvm::Triple::x86_64 || TT.isCBCHostX86_64())
+    RuntimeSubdir = "linux_x86_64_cjnative";
+  else if (TT.getArch() == llvm::Triple::aarch64 || TT.isCBCHostAArch64())
+    RuntimeSubdir = "linux_aarch64_cjnative";
+  if (RuntimeSubdir) {
+    SmallString<256> RuntimeLib(*CjHome);
+    llvm::sys::path::append(RuntimeLib, "runtime", "lib", RuntimeSubdir);
     CmdArgs.push_back("-L");
-    CmdArgs.push_back(Args.MakeArgString(ToolsLib));
-    const char *RuntimeSubdir = nullptr;
-    const llvm::Triple &TT = getToolChain().getTriple();
-    if (TT.getArch() == llvm::Triple::x86_64 || TT.isCBCHostX86_64())
-      RuntimeSubdir = "linux_x86_64_cjnative";
-    else if (TT.getArch() == llvm::Triple::aarch64 || TT.isCBCHostAArch64())
-      RuntimeSubdir = "linux_aarch64_cjnative";
-    if (RuntimeSubdir) {
-      SmallString<256> RuntimeLib(*CjHome);
-      llvm::sys::path::append(RuntimeLib, "runtime", "lib", RuntimeSubdir);
-      CmdArgs.push_back("-L");
-      CmdArgs.push_back(Args.MakeArgString(RuntimeLib));
-    }
+    CmdArgs.push_back(Args.MakeArgString(RuntimeLib));
   }
   Args.addAllArgs(CmdArgs, {options::OPT_L});
   getToolChain().AddFilePathLibArgs(Args, CmdArgs);

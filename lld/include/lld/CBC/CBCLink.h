@@ -35,8 +35,9 @@ struct CBCLinkRequest {
   llvm::StringRef outputPath;
   // From the first bitcode module; do not hardcode a CBC arch triple.
   llvm::Triple triple;
-  // When true, set module flag cbc-wrap and emit __cbc_lib_start shapes.
-  bool wrap = false;
+  // Always true for clang/lld products: set module flag cbc-wrap and emit
+  // __cbc_lib_start shapes. Standalone .cbc emit is removed.
+  bool wrap = true;
 };
 
 /// One CBC method as a native shared-library export (N2C stub).
@@ -64,18 +65,19 @@ struct CBCLinkResult {
 /// IR-link, O2, policy checks, CBC codegen into memory.
 bool linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out);
 
-/// linkToMemory + write request.outputPath. Returns true on success.
-bool link(const CBCLinkRequest &request);
-
-/// Build host wrap module (blob + ctor), codegen, deferred native -shared link.
-/// \p hostSearchPaths are -L dirs from the CBC link.
+/// Build host wrap module (blob + N2C stubs + .init_array ctor), codegen,
+/// deferred native -shared link. \p hostSearchPaths are -L dirs from the CBC
+/// link.
 bool emitSharedWrap(llvm::StringRef outputPath, const CBCLinkResult &result,
                     llvm::ArrayRef<llvm::StringRef> hostSearchPaths = {});
+
+/// Build host wrap module without .init_array (main calls __cbc_embed_load),
+/// codegen, deferred host-clang PIE link with -lcbc-main.
+bool emitExecutableWrap(llvm::StringRef outputPath,
+                        const CBCLinkResult &result,
+                        llvm::ArrayRef<llvm::StringRef> hostSearchPaths = {});
 
 } // namespace cbc
 } // namespace lld
 
 #endif
-
-
-

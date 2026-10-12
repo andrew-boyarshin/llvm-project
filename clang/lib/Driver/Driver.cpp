@@ -5440,8 +5440,6 @@ InputInfoList Driver::BuildJobsForActionNoCache(
 
 const char *Driver::getDefaultImageName() const {
   llvm::Triple Target(llvm::Triple::normalize(TargetTriple));
-  if (CBCMode)
-    return "a.cbc";
   return Target.isOSWindows() ? "a.exe" : "a.out";
 }
 

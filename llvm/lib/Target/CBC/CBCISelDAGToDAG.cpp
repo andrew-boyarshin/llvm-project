@@ -34,10 +34,16 @@ static bool cbcMapCond(ISD::CondCode CC, bool IsFloat, unsigned &Code,
   case ISD::SETEQ: Code = 8; return true;
   case ISD::SETUNE:
   case ISD::SETNE: Code = 9; return true;
-  case ISD::SETOLT: Code = 10; return true;
-  case ISD::SETOGT: Code = 10; Swap = true; return true;
-  case ISD::SETOGE: Code = 12; return true;
-  case ISD::SETOLE: Code = 12; Swap = true; return true;
+  // SETLT/SETGT/SETLE/SETGE appear for FP when both sides are known
+  // never-NaN (e.g. uitofp / fmul nnan). Same CBC codes as ordered.
+  case ISD::SETOLT:
+  case ISD::SETLT: Code = 10; return true;
+  case ISD::SETOGT:
+  case ISD::SETGT: Code = 10; Swap = true; return true;
+  case ISD::SETOGE:
+  case ISD::SETGE: Code = 12; return true;
+  case ISD::SETOLE:
+  case ISD::SETLE: Code = 12; Swap = true; return true;
   case ISD::SETUGE: Code = 11; return true;
   case ISD::SETULE: Code = 11; Swap = true; return true;
   case ISD::SETULT: Code = 13; return true;
