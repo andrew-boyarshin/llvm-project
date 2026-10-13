@@ -247,7 +247,7 @@ bool CBCLowerGlobalsLegacy::runOnModule(Module &M) {
         if (!CI || !CI->isInlineAsm())
           continue;
         auto *IA = cast<InlineAsm>(CI->getCalledOperand());
-        if (!IA->getAsmString().empty())
+        if (!IA->getAsmString().trim().empty())
           report_fatal_error("CBC does not support non-empty inline assembly");
         if (CI->getType()->isVoidTy()) {
           CI->eraseFromParent();
@@ -347,6 +347,33 @@ bool CBCLowerGlobalsLegacy::runOnModule(Module &M) {
         "__cbc_dlcache_" + symbolKey(GV.getName()));
     Cache->setAlignment(DL.getABITypeAlign(CacheTy));
     NativeAddr[&GV] = dlsymHelper(M, GV.getName(), Cache);
+  }
+
+  // No fence opcode: rewrite fence to seq_cst fetch-add 0 on a dummy image
+  // word so ISel emits AtomicFetchAdd on $cbc:A64.v.
+  {
+    SmallVector<FenceInst *, 4> Fences;
+    for (Function &F : M)
+      for (BasicBlock &BB : F)
+        for (Instruction &I : BB)
+          if (auto *FI = dyn_cast<FenceInst>(&I))
+            Fences.push_back(FI);
+    if (!Fences.empty()) {
+      GlobalVariable *FenceWord = M.getGlobalVariable("__cbc_fence_word", true);
+      if (!FenceWord) {
+        FenceWord = new GlobalVariable(
+            M, Type::getInt64Ty(Ctx), false, GlobalValue::InternalLinkage,
+            ConstantInt::get(Type::getInt64Ty(Ctx), 0), "__cbc_fence_word");
+        FenceWord->setAlignment(Align(8));
+      }
+      for (FenceInst *FI : Fences) {
+        IRBuilder<> B(FI);
+        B.CreateAtomicRMW(AtomicRMWInst::Add, FenceWord,
+                          ConstantInt::get(Type::getInt64Ty(Ctx), 0), Align(8),
+                          AtomicOrdering::SequentiallyConsistent);
+        FI->eraseFromParent();
+      }
+    }
   }
 
   SmallVector<Placed, 8> Items;

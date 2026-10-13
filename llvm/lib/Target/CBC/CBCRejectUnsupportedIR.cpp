@@ -16,6 +16,7 @@
 #include "CBC.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalIFunc.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
@@ -87,8 +88,13 @@ void checkFunction(Function &F) {
   for (BasicBlock &BB : F) {
     for (Instruction &I : BB) {
       if (auto *CB = dyn_cast<CallBase>(&I)) {
-        if (CB->isInlineAsm())
-          fail(F.getName(), "inline assembly");
+        if (CB->isInlineAsm()) {
+          auto *IA = cast<InlineAsm>(CB->getCalledOperand());
+          // Empty asm is a compiler barrier / tied copy; CBCLowerGlobals
+          // expands it. Reject only real assembly text.
+          if (!IA->getAsmString().trim().empty())
+            fail(F.getName(), "inline assembly");
+        }
         if (isTargetSIMDIntrinsic(CB->getCalledFunction()))
           fail(F.getName(), "target SIMD intrinsic");
       }

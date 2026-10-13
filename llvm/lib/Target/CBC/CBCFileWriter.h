@@ -38,7 +38,8 @@ struct CBCCompiledMethod {
   std::vector<ExRegion> Regions;
 };
 
-/// One CBC method as a native shared-library export (N2C stub).
+/// One CBC method that gets a host N2C stub (not every method in the image).
+/// Candidates: `__cbc_lib_start`, default-visibility externals, address-taken.
 /// Index 0 is always `__cbc_lib_start` when wrap is set.
 struct CBCExport {
   std::string Name;
@@ -69,7 +70,8 @@ struct CBCImageInfo {
 
 struct CBCFileBuildResult {
   std::string Bytes;
-  SmallVector<CBCExport, 0> Exports; // index 0 == __cbc_lib_start when present
+  /// N2C stub candidates only; index 0 == __cbc_lib_start when present.
+  SmallVector<CBCExport, 0> Exports;
 };
 
 /// Write a whole-program `.cbc` whose entry method is `main`.

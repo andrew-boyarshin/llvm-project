@@ -40,7 +40,8 @@ struct CBCLinkRequest {
   bool wrap = true;
 };
 
-/// One CBC method as a native shared-library export (N2C stub).
+/// One CBC method that gets a host N2C stub (not every method in the image).
+/// Candidates: `__cbc_lib_start`, default-visibility externals, address-taken.
 /// Index 0 is always `__cbc_lib_start` when wrap is set.
 struct CBCExport {
   std::string name;
@@ -57,7 +58,8 @@ struct CBCLinkResult {
   llvm::SmallVector<char, 0> bytes;
   llvm::Triple triple;
   llvm::SmallVector<std::string, 0> aotDeps;
-  llvm::SmallVector<CBCExport, 0> exports; // index 0 == __cbc_lib_start
+  /// N2C stub candidates only; index 0 == __cbc_lib_start.
+  llvm::SmallVector<CBCExport, 0> exports;
   bool hasMain = false;
   bool wrap = false;
 };

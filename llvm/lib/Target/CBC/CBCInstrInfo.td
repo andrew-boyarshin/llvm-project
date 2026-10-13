@@ -141,6 +141,83 @@ def SELECT_FPR_I : CBCInst<(outs FPR:$d),
   let usesCustomInserter = 1;
 }
 
+// CBC atomics (opcodes 0x65–0x6D). Width is carried by the $cbc:A*.v field ref,
+// not the opcode. mayLoad/mayStore keep DCE from deleting them.
+multiclass AtomicLDST<string suffix> {
+  def LD_#suffix : CBCInst<(outs GPR:$d), (ins GPR:$p),
+                           !strconcat("atomic.ld.", suffix, " $d, $p")> {
+    let mayLoad = 1;
+    let hasSideEffects = 1;
+  }
+  def ST_#suffix : CBCInst<(outs), (ins GPR:$s, GPR:$p),
+                           !strconcat("atomic.st.", suffix, " $s, $p")> {
+    let mayStore = 1;
+    let hasSideEffects = 1;
+  }
+}
+defm ATOMIC_ : AtomicLDST<"8">;
+defm ATOMIC_ : AtomicLDST<"16">;
+defm ATOMIC_ : AtomicLDST<"32">;
+defm ATOMIC_ : AtomicLDST<"64">;
+
+multiclass AtomicCASXchgF<string suffix> {
+  def CAS_#suffix : CBCInst<(outs GPR:$d), (ins GPR:$p, GPR:$exp, GPR:$new),
+                            !strconcat("atomic.cas.", suffix, " $d, $p")> {
+    let mayLoad = 1;
+    let mayStore = 1;
+    let hasSideEffects = 1;
+  }
+  def XCHG_#suffix : CBCInst<(outs GPR:$d), (ins GPR:$p, GPR:$s),
+                             !strconcat("atomic.xchg.", suffix, " $d, $p")> {
+    let mayLoad = 1;
+    let mayStore = 1;
+    let hasSideEffects = 1;
+  }
+  def FADD_#suffix : CBCInst<(outs GPR:$d), (ins GPR:$p, GPR:$s),
+                             !strconcat("atomic.fadd.", suffix, " $d, $p")> {
+    let mayLoad = 1;
+    let mayStore = 1;
+    let hasSideEffects = 1;
+  }
+  def FSUB_#suffix : CBCInst<(outs GPR:$d), (ins GPR:$p, GPR:$s),
+                             !strconcat("atomic.fsub.", suffix, " $d, $p")> {
+    let mayLoad = 1;
+    let mayStore = 1;
+    let hasSideEffects = 1;
+  }
+  def FAND_#suffix : CBCInst<(outs GPR:$d), (ins GPR:$p, GPR:$s),
+                             !strconcat("atomic.fand.", suffix, " $d, $p")> {
+    let mayLoad = 1;
+    let mayStore = 1;
+    let hasSideEffects = 1;
+  }
+  def FOR_#suffix : CBCInst<(outs GPR:$d), (ins GPR:$p, GPR:$s),
+                            !strconcat("atomic.for.", suffix, " $d, $p")> {
+    let mayLoad = 1;
+    let mayStore = 1;
+    let hasSideEffects = 1;
+  }
+  def FXOR_#suffix : CBCInst<(outs GPR:$d), (ins GPR:$p, GPR:$s),
+                             !strconcat("atomic.fxor.", suffix, " $d, $p")> {
+    let mayLoad = 1;
+    let mayStore = 1;
+    let hasSideEffects = 1;
+  }
+  // Pseudo: strong CAS retry loop expanded by EmitInstrWithCustomInserter.
+  def CMP_SWAP_LOOP_#suffix : CBCInst<(outs GPR:$old, GPR:$ok),
+      (ins GPR:$p, GPR:$exp, GPR:$new),
+      !strconcat("atomic.cmp.swap.loop.", suffix, " $old, $ok, $p")> {
+    let usesCustomInserter = 1;
+    let mayLoad = 1;
+    let mayStore = 1;
+    let hasSideEffects = 1;
+  }
+}
+defm ATOMIC_ : AtomicCASXchgF<"8">;
+defm ATOMIC_ : AtomicCASXchgF<"16">;
+defm ATOMIC_ : AtomicCASXchgF<"32">;
+defm ATOMIC_ : AtomicCASXchgF<"64">;
+
 // Both return regs are Uses so two-register aggregates keep IR2/FR1 live.
 // LowerReturn zero-fills any unused member of the pair.
 def RET : CBCInst<(outs), (ins), "ret.W64 ir1"> {

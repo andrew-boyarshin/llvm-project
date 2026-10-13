@@ -53,9 +53,51 @@ Triple hostTripleFromCBC(const Triple &CBC) {
                 CBC.getEnvironmentName());
 }
 
+bool isReplaceableNewDelete(StringRef Name) {
+  // Itanium mangling of replaceable `operator new` / `operator delete`.
+  return Name.starts_with("_Znw") || Name.starts_with("_Zna") ||
+         Name.starts_with("_Zdl") || Name.starts_with("_Zda");
+}
+
+bool isItaniumExceptionAbi(StringRef Name) {
+  // Keep the exit-handler family visible: CBC crt owns atexit/__cxa_atexit.
+  if (Name == "__cxa_atexit" || Name == "__cxa_finalize" ||
+      Name == "__cxa_thread_atexit" || Name == "__cxa_thread_atexit_impl")
+    return false;
+  return Name.starts_with("__cxa_") || Name == "__gxx_personality_v0" ||
+         Name == "__gcc_personality_v0" || Name == "__dynamic_cast";
+}
+
+bool isStdExceptionRuntime(StringRef Name) {
+  // libc++abi emits these with the same Itanium names as libstdc++.
+  // Executable wrap uses -rdynamic, so default-vis N2C stubs interpose
+  // host libstdc++ / libcangjie-runtime imports. That shows up as
+  // ios_base::Init::~Init → ostream::flush → std::uncaught_exception →
+  // CBC N2C stub → SEGV (near-null Load) during ELF fini.
+  return Name == "_ZSt9terminatev" || Name == "_ZSt10unexpectedv" ||
+         Name == "_ZSt18uncaught_exceptionv" ||
+         Name == "_ZSt19uncaught_exceptionsv" ||
+         Name == "_ZSt17current_exceptionv" ||
+         Name == "_ZSt17rethrow_exceptionSt13exception_ptr" ||
+         Name.starts_with("_ZSt13get_terminate") ||
+         Name.starts_with("_ZSt13set_terminate") ||
+         Name.starts_with("_ZSt14get_unexpected") ||
+         Name.starts_with("_ZSt14set_unexpected") ||
+         Name.starts_with("_ZSt15get_new_handler") ||
+         Name.starts_with("_ZSt15set_new_handler") ||
+         Name.starts_with("_ZSt17__throw_");
+}
+
+bool isHostAbiInterposer(StringRef Name) {
+  // Default-vis N2C stubs are exported with -rdynamic and interpose the
+  // same names in libcangjie-runtime / libstdc++ during ELF ctor/dtor.
+  return isReplaceableNewDelete(Name) || isItaniumExceptionAbi(Name) ||
+         isStdExceptionRuntime(Name);
+}
+
 bool isAlwaysHiddenExport(StringRef Name) {
   return Name == "main" || Name == "__cbc_main" || Name == "__cbc_entry" ||
-         Name == "__cbc_lib_start";
+         Name == "__cbc_lib_start" || isHostAbiInterposer(Name);
 }
 
 /// ELF symbol for an N2C stub. Executable wrap must not define ELF `main`

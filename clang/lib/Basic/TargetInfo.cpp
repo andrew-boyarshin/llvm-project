@@ -584,6 +584,15 @@ void TargetInfo::adjust(DiagnosticsEngine &Diags, LangOptions &Opts,
   // Check if it's CUDA device compilation; ensure layout consistency with host.
   if (Opts.CUDA && Opts.CUDAIsDevice && Aux && !HasMicrosoftRecordLayout)
     HasMicrosoftRecordLayout = Aux->getCXXABI().isMicrosoft();
+
+  // CBC engine atomics are ≤ 64-bit. Host TargetInfo may advertise 128 (cx16);
+  // cap so 16-byte atomics go through compiler-rt __atomic_* libcalls.
+  if (Opts.CBC) {
+    if (MaxAtomicPromoteWidth > 64)
+      MaxAtomicPromoteWidth = 64;
+    if (MaxAtomicInlineWidth > 64)
+      MaxAtomicInlineWidth = 64;
+  }
 }
 
 bool TargetInfo::initFeatureMap(

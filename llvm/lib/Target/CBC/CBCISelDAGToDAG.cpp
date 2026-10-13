@@ -467,23 +467,100 @@ public:
     case ISD::ATOMIC_LOAD: {
       auto *AN = cast<AtomicSDNode>(N);
       MVT MemVT = AN->getMemoryVT().getSimpleVT();
-      unsigned Opc = MemVT == MVT::i8    ? CBC::LDRAW8
-                     : MemVT == MVT::i32 ? CBC::LDRAW32
-                                         : CBC::LDRAW64;
-      SDValue Ops[] = {AN->getBasePtr(),
-                       CurDAG->getTargetConstant(0, DL, MVT::i64), AN->getChain()};
+      unsigned Opc = MemVT == MVT::i8    ? CBC::ATOMIC_LD_8
+                     : MemVT == MVT::i16 ? CBC::ATOMIC_LD_16
+                     : MemVT == MVT::i32 ? CBC::ATOMIC_LD_32
+                     : MemVT == MVT::i64 ? CBC::ATOMIC_LD_64
+                                        : 0;
+      if (!Opc)
+        break;
+      SDValue Ops[] = {AN->getBasePtr(), AN->getChain()};
       CurDAG->SelectNodeTo(N, Opc, N->getValueType(0), MVT::Other, Ops);
       return;
     }
     case ISD::ATOMIC_STORE: {
       auto *AN = cast<AtomicSDNode>(N);
       MVT MemVT = AN->getMemoryVT().getSimpleVT();
-      unsigned Opc = MemVT == MVT::i8    ? CBC::STRAW8
-                     : MemVT == MVT::i32 ? CBC::STRAW32
-                                         : CBC::STRAW64;
-      SDValue Ops[] = {AN->getVal(), AN->getBasePtr(),
-                       CurDAG->getTargetConstant(0, DL, MVT::i64), AN->getChain()};
+      unsigned Opc = MemVT == MVT::i8    ? CBC::ATOMIC_ST_8
+                     : MemVT == MVT::i16 ? CBC::ATOMIC_ST_16
+                     : MemVT == MVT::i32 ? CBC::ATOMIC_ST_32
+                     : MemVT == MVT::i64 ? CBC::ATOMIC_ST_64
+                                        : 0;
+      if (!Opc)
+        break;
+      SDValue Ops[] = {AN->getVal(), AN->getBasePtr(), AN->getChain()};
       CurDAG->SelectNodeTo(N, Opc, MVT::Other, Ops);
+      return;
+    }
+    case ISD::ATOMIC_SWAP:
+    case ISD::ATOMIC_LOAD_ADD:
+    case ISD::ATOMIC_LOAD_SUB:
+    case ISD::ATOMIC_LOAD_AND:
+    case ISD::ATOMIC_LOAD_OR:
+    case ISD::ATOMIC_LOAD_XOR: {
+      auto *AN = cast<AtomicSDNode>(N);
+      MVT MemVT = AN->getMemoryVT().getSimpleVT();
+      auto pick = [&](unsigned W8, unsigned W16, unsigned W32,
+                      unsigned W64) -> unsigned {
+        if (MemVT == MVT::i8)
+          return W8;
+        if (MemVT == MVT::i16)
+          return W16;
+        if (MemVT == MVT::i32)
+          return W32;
+        if (MemVT == MVT::i64)
+          return W64;
+        return 0;
+      };
+      unsigned Opc = 0;
+      switch (N->getOpcode()) {
+      case ISD::ATOMIC_SWAP:
+        Opc = pick(CBC::ATOMIC_XCHG_8, CBC::ATOMIC_XCHG_16, CBC::ATOMIC_XCHG_32,
+                   CBC::ATOMIC_XCHG_64);
+        break;
+      case ISD::ATOMIC_LOAD_ADD:
+        Opc = pick(CBC::ATOMIC_FADD_8, CBC::ATOMIC_FADD_16, CBC::ATOMIC_FADD_32,
+                   CBC::ATOMIC_FADD_64);
+        break;
+      case ISD::ATOMIC_LOAD_SUB:
+        Opc = pick(CBC::ATOMIC_FSUB_8, CBC::ATOMIC_FSUB_16, CBC::ATOMIC_FSUB_32,
+                   CBC::ATOMIC_FSUB_64);
+        break;
+      case ISD::ATOMIC_LOAD_AND:
+        Opc = pick(CBC::ATOMIC_FAND_8, CBC::ATOMIC_FAND_16, CBC::ATOMIC_FAND_32,
+                   CBC::ATOMIC_FAND_64);
+        break;
+      case ISD::ATOMIC_LOAD_OR:
+        Opc = pick(CBC::ATOMIC_FOR_8, CBC::ATOMIC_FOR_16, CBC::ATOMIC_FOR_32,
+                   CBC::ATOMIC_FOR_64);
+        break;
+      case ISD::ATOMIC_LOAD_XOR:
+        Opc = pick(CBC::ATOMIC_FXOR_8, CBC::ATOMIC_FXOR_16, CBC::ATOMIC_FXOR_32,
+                   CBC::ATOMIC_FXOR_64);
+        break;
+      }
+      if (!Opc)
+        break;
+      // AtomicSDNode: chain, ptr, val
+      SDValue Ops[] = {AN->getBasePtr(), AN->getVal(), AN->getChain()};
+      CurDAG->SelectNodeTo(N, Opc, N->getValueType(0), MVT::Other, Ops);
+      return;
+    }
+    case ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS: {
+      auto *AN = cast<AtomicSDNode>(N);
+      MVT MemVT = AN->getMemoryVT().getSimpleVT();
+      unsigned Opc = MemVT == MVT::i8    ? CBC::ATOMIC_CMP_SWAP_LOOP_8
+                     : MemVT == MVT::i16 ? CBC::ATOMIC_CMP_SWAP_LOOP_16
+                     : MemVT == MVT::i32 ? CBC::ATOMIC_CMP_SWAP_LOOP_32
+                     : MemVT == MVT::i64 ? CBC::ATOMIC_CMP_SWAP_LOOP_64
+                                        : 0;
+      if (!Opc)
+        break;
+      // Operands: chain, ptr, cmp, swap → outs old, success, chain
+      SDValue Ops[] = {AN->getBasePtr(), AN->getVal(), N->getOperand(3),
+                       AN->getChain()};
+      CurDAG->SelectNodeTo(N, Opc, N->getValueType(0), N->getValueType(1),
+                           MVT::Other, Ops);
       return;
     }
     case ISD::LOAD: {
@@ -962,7 +1039,10 @@ public:
     std::string Msg;
     raw_string_ostream OS(Msg);
     N->print(OS);
-    report_fatal_error(Twine("CBC cannot select: ") + OS.str());
+    // Usage error, not an internal bug: exit(1). GenCrashDiag would abort and
+    // currently SIGSEGVs inside ld.lld after the LLVM ERROR line.
+    report_fatal_error(Twine("CBC cannot select: ") + OS.str(),
+                       /*GenCrashDiag=*/false);
   }
 };
 

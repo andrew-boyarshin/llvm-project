@@ -34,6 +34,11 @@ public:
                       LLVMContext &Context, const Type *RetTy) const override;
   EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
                          EVT VT) const override;
+  AtomicExpansionKind
+  shouldExpandAtomicRMWInIR(const AtomicRMWInst *RMW) const override;
+  ISD::NodeType getExtendForAtomicCmpSwapArg() const override {
+    return ISD::ZERO_EXTEND;
+  }
   // Keep SDIV/SREM nodes for constant divisors. Magic-mul expansion is wrong
   // for CBC W32 values (bits 63:32 undefined after Binary32).
   bool isIntDivCheap(EVT VT, AttributeList) const override {

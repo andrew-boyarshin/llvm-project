@@ -307,19 +307,30 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
   out.bytes = std::move(Buf);
   out.triple = ExpectedTriple;
 
-  // Copy method-offset exports from CBC codegen (index 0 == __cbc_lib_start).
+  // Copy N2C stub candidates from CBC codegen (FileWriter already filtered to
+  // lib_start / DefaultVis / AddressTaken; index 0 == __cbc_lib_start).
   SmallVector<llvm::CBCExport, 0> CodegenExports =
       CBCTakeExportsFromTargetMachine(*TM);
   out.exports.clear();
   for (const llvm::CBCExport &E : CodegenExports) {
-    // N2C stubs hardcode cpStackSize=0, so stubbed exports' Params must fit
-    // the host register file. MaxCalleeStackArgs is outgoing call stack
-    // slots, not this prototype.
-    bool NeedsN2CStub = E.DefaultVis || E.AddressTaken;
-    if (NeedsN2CStub && E.VarArg) {
-      error("CBC native shared library: varargs export '" + E.Name +
-            "' is not supported");
-      return false;
+    // N2C stubs hardcode cpStackSize=0, so Params must fit the host register
+    // file. MaxCalleeStackArgs is outgoing call stack slots, not this
+    // prototype. ABI-illegal default-vis helpers that are not address-taken
+    // are omitted (CBC-only callers use call.2i); address-taken / lib_start
+    // still error because stub identity is required.
+    bool MustStub = E.AddressTaken || E.Name == "__cbc_lib_start";
+    auto omitOrError = [&](Twine Msg) -> bool {
+      if (MustStub) {
+        error(Msg);
+        return false;
+      }
+      return true; // soft-omit: skip push_back
+    };
+    if (E.VarArg) {
+      if (!omitOrError("CBC native shared library: varargs export '" + E.Name +
+                       "' is not supported"))
+        return false;
+      continue;
     }
     unsigned Ints = 0, Floats = 0;
     for (char C : E.Params) {
@@ -329,10 +340,11 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
         ++Ints;
     }
     // SysV: 6 int + 8 SSE; AAPCS: 8 int + 8 SIMD. Use the looser int limit.
-    if (NeedsN2CStub && (Ints > 8 || Floats > 8)) {
-      error("CBC native shared library: export '" + E.Name +
-            "' does not fit the host register file");
-      return false;
+    if (Ints > 8 || Floats > 8) {
+      if (!omitOrError("CBC native shared library: export '" + E.Name +
+                       "' does not fit the host register file"))
+        return false;
+      continue;
     }
     cbc::CBCExport OutE;
     OutE.name = E.Name;
@@ -344,6 +356,10 @@ bool cbc::linkToMemory(const CBCLinkRequest &request, CBCLinkResult &out) {
     OutE.retFloat = E.RetFloat;
     OutE.maxCalleeStackArgs = E.MaxCalleeStackArgs;
     out.exports.push_back(std::move(OutE));
+  }
+  if (out.exports.empty() || out.exports[0].name != "__cbc_lib_start") {
+    error("CBC wrap requires __cbc_lib_start as export index 0");
+    return false;
   }
   return errorCount() == 0;
 }

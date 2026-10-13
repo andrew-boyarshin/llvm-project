@@ -69,6 +69,17 @@ static std::string hashTable(ArrayRef<uint32_t> Entries) {
   return O;
 }
 
+/// Offset/ref sequence: uleb(totalBytes) followed by that many bytes of ULEBs.
+static std::string writeSequence(ArrayRef<uint32_t> Offs) {
+  std::string Payload;
+  for (uint32_t O : Offs)
+    appendULEB(Payload, O);
+  std::string Out;
+  appendULEB(Out, Payload.size());
+  Out += Payload;
+  return Out;
+}
+
 static void appendSLEB(std::string &O, int64_t V) {
   uint8_t Buf[16];
   unsigned Len = encodeSLEB128(V, Buf);
@@ -401,9 +412,13 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
     Def.push_back(0);
     uint32_t Off = add(Def);
     MDefs.push_back(Off);
+    // N2C stub candidates only: lib_start (engine entry), default-vis
+    // externals, and address-taken. Other methods stay in the method table
+    // and are entered via call.2i / FuH, not host stubs.
     const CBCCompiledMethod &M = Methods[I];
-    Exports.push_back({M.Name, Off, M.DefaultVis, M.AddressTaken, M.VarArg,
-                       M.Params, M.RetFloat, M.MaxCalleeStackArgs});
+    if (M.Name == "__cbc_lib_start" || M.DefaultVis || M.AddressTaken)
+      Exports.push_back({M.Name, Off, M.DefaultVis, M.AddressTaken, M.VarArg,
+                         M.Params, M.RetFloat, M.MaxCalleeStackArgs});
   }
 
   std::string Type;
@@ -420,7 +435,7 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
   SmallVector<uint32_t, 4> TypeDefs;
   TypeDefs.push_back(TDef);
 
-  SmallVector<uint32_t, 2> FRefs;
+  SmallVector<uint32_t, 6> FRefs;
   if (Image.SizeBytes) {
     std::string FDef;
     appendU32(FDef, SImageName);
@@ -449,6 +464,50 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
     appendULEB(DType, 0);
     DType.push_back(0);
     TypeDefs.push_back(add(DType));
+  }
+
+  // Atomic overlays: RECORD types with one instance field v at offset 0 so a
+  // raw C pointer can be the "object" for opcodes 0x65–0x6D. Append field refs
+  // after Data.image so LEA_IMAGE's hardcoded FRef 0 stays valid.
+  static const struct {
+    const char *Name;
+    unsigned Builtin; // I8=5, I16=7, I32=9, I64=12
+  } ATypes[] = {{"$cbc:A8", 5},
+                {"$cbc:A16", 7},
+                {"$cbc:A32", 9},
+                {"$cbc:A64", 12}};
+  uint32_t SV = add(cbcString("v"));
+  for (const auto &AT : ATypes) {
+    uint32_t SName = add(cbcString(AT.Name));
+    TermOffs.push_back(add(std::string("\x0D", 1) + ulebStr(SName))); // REC
+    uint32_t RecId = 20 + TermOffs.size() - 1;
+
+    std::string FDef;
+    appendU32(FDef, SV);
+    FDef.push_back(0);
+    appendULEB(FDef, AT.Builtin);
+    FDef.push_back(0x01); // PUBLIC (instance)
+    FDef.push_back(0);
+    uint32_t FD = add(FDef);
+
+    std::string RType;
+    appendU32(RType, SName);
+    RType.push_back(0);
+    appendU16(RType, 0x041); // PUBLIC|RECORD
+    appendULEB(RType, 0);
+    RType += hashTable({});
+    appendULEB(RType, 0); // empty virtual-method sequence
+    RType += hashTable({});
+    RType += writeSequence(ArrayRef<uint32_t>(FD));
+    RType.push_back(0);
+    TypeDefs.push_back(add(RType));
+
+    std::string FRef;
+    FRef.push_back(0); // SINGLE
+    appendU32(FRef, SV);
+    appendULEB(FRef, RecId);
+    appendULEB(FRef, AT.Builtin);
+    FRefs.push_back(add(FRef));
   }
 
   SmallVector<uint32_t, 8> AotEntryOffs;

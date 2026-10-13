@@ -7,6 +7,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/IR/GlobalAlias.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/MathExtras.h"
 #include <string>
 
@@ -108,6 +109,33 @@ CBCTargetLowering::CBCTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::FRAMEADDR, MVT::i64, Custom);
   for (unsigned Opc : {ISD::SHL_PARTS, ISD::SRL_PARTS, ISD::SRA_PARTS})
     setOperationAction(Opc, MVT::i64, Custom);
+
+  // Engine atomics are seq_cst through $cbc:A*.v for 8–64-bit integers.
+  // Default MaxAtomicSizeInBitsSupported is 0 (everything becomes a libcall).
+  setMaxAtomicSizeInBitsSupported(64);
+  // Default ATOMIC_CMP_SWAP_WITH_SUCCESS is Expand, which assumes CAS returns
+  // the old value. CBC CAS returns only a boolean — mark Legal so ISel sees it.
+  for (MVT VT : {MVT::i8, MVT::i16, MVT::i32, MVT::i64})
+    setOperationAction(ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS, VT, Legal);
+}
+
+TargetLowering::AtomicExpansionKind
+CBCTargetLowering::shouldExpandAtomicRMWInIR(const AtomicRMWInst *RMW) const {
+  unsigned Size = RMW->getType()->getPrimitiveSizeInBits();
+  if (Size > 64)
+    return AtomicExpansionKind::None; // AtomicExpand emits libcalls by size
+  switch (RMW->getOperation()) {
+  case AtomicRMWInst::Xchg:
+  case AtomicRMWInst::Add:
+  case AtomicRMWInst::Sub:
+  case AtomicRMWInst::And:
+  case AtomicRMWInst::Or:
+  case AtomicRMWInst::Xor:
+    return AtomicExpansionKind::None;
+  default:
+    // nand/min/max/FP/wrap/… — expand to cmpxchg; AtomicExpand casts FP.
+    return AtomicExpansionKind::CmpXChg;
+  }
 }
 
 SDValue CBCTargetLowering::LowerReturn(
@@ -369,15 +397,153 @@ SDValue CBCTargetLowering::LowerFormalArguments(
 MachineBasicBlock *CBCTargetLowering::EmitInstrWithCustomInserter(
     MachineInstr &MI, MachineBasicBlock *MBB) const {
   unsigned Opc = MI.getOpcode();
+  const TargetInstrInfo &TII = *MBB->getParent()->getSubtarget().getInstrInfo();
+  DebugLoc DL = MI.getDebugLoc();
+  MachineFunction *MF = MBB->getParent();
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+
+  auto isCmpSwapLoop = [&](unsigned &CasOpc, unsigned &LdOpc,
+                           uint64_t &Mask) -> bool {
+    switch (Opc) {
+    case CBC::ATOMIC_CMP_SWAP_LOOP_8:
+      CasOpc = CBC::ATOMIC_CAS_8;
+      LdOpc = CBC::ATOMIC_LD_8;
+      Mask = 0xff;
+      return true;
+    case CBC::ATOMIC_CMP_SWAP_LOOP_16:
+      CasOpc = CBC::ATOMIC_CAS_16;
+      LdOpc = CBC::ATOMIC_LD_16;
+      Mask = 0xffff;
+      return true;
+    case CBC::ATOMIC_CMP_SWAP_LOOP_32:
+      CasOpc = CBC::ATOMIC_CAS_32;
+      LdOpc = CBC::ATOMIC_LD_32;
+      Mask = 0xffffffffu;
+      return true;
+    case CBC::ATOMIC_CMP_SWAP_LOOP_64:
+      CasOpc = CBC::ATOMIC_CAS_64;
+      LdOpc = CBC::ATOMIC_LD_64;
+      Mask = 0;
+      return true;
+    default:
+      return false;
+    }
+  };
+
+  unsigned CasOpc = 0, LdOpc = 0;
+  uint64_t WidthMask = 0;
+  if (isCmpSwapLoop(CasOpc, LdOpc, WidthMask)) {
+    // Strong CAS loop: CBC CAS returns only a boolean flag.
+    //   loop: flag = CAS; if flag: old=exp, ok=1; done
+    //         cur = LD; if (cur&m)==(exp&m): retry; else old=cur, ok=0
+    // Use a dedicated LoopBB so the function entry never becomes a loop header
+    // (BlockFrequencyInfo asserts on that).
+    Register DestOld = MI.getOperand(0).getReg();
+    Register DestOk = MI.getOperand(1).getReg();
+    Register Ptr = MI.getOperand(2).getReg();
+    Register Exp = MI.getOperand(3).getReg();
+    Register New = MI.getOperand(4).getReg();
+
+    MachineBasicBlock *LoopBB = MF->CreateMachineBasicBlock(MBB->getBasicBlock());
+    MachineBasicBlock *SuccBB = MF->CreateMachineBasicBlock(MBB->getBasicBlock());
+    MachineBasicBlock *LoadBB = MF->CreateMachineBasicBlock(MBB->getBasicBlock());
+    MachineBasicBlock *FailBB = MF->CreateMachineBasicBlock(MBB->getBasicBlock());
+    MachineBasicBlock *DoneBB = MF->CreateMachineBasicBlock(MBB->getBasicBlock());
+    MachineFunction::iterator It = ++MBB->getIterator();
+    MF->insert(It, LoopBB);
+    MF->insert(It, SuccBB);
+    MF->insert(It, LoadBB);
+    MF->insert(It, FailBB);
+    MF->insert(It, DoneBB);
+    DoneBB->splice(DoneBB->begin(), MBB, std::next(MI.getIterator()),
+                   MBB->end());
+    DoneBB->transferSuccessorsAndUpdatePHIs(MBB);
+
+    MBB->addSuccessor(LoopBB);
+    LoopBB->addSuccessor(SuccBB);
+    LoopBB->addSuccessor(LoadBB);
+    SuccBB->addSuccessor(DoneBB);
+    LoadBB->addSuccessor(LoopBB);
+    LoadBB->addSuccessor(FailBB);
+    FailBB->addSuccessor(DoneBB);
+
+    BuildMI(MBB, DL, TII.get(CBC::JMP)).addMBB(LoopBB);
+
+    Register Flag = MRI.createVirtualRegister(&CBC::GPRRegClass);
+    Register Zero = MRI.createVirtualRegister(&CBC::GPRRegClass);
+    Register One = MRI.createVirtualRegister(&CBC::GPRRegClass);
+    BuildMI(LoopBB, DL, TII.get(CBC::MOV64ri), Zero).addImm(0);
+    BuildMI(LoopBB, DL, TII.get(CBC::MOV64ri), One).addImm(1);
+    BuildMI(LoopBB, DL, TII.get(CasOpc), Flag)
+        .addReg(Ptr)
+        .addReg(Exp)
+        .addReg(New);
+    // if flag != 0 → success
+    BuildMI(LoopBB, DL, TII.get(CBC::BCC64))
+        .addImm(1) // SETNE
+        .addReg(Flag)
+        .addReg(Zero)
+        .addMBB(SuccBB);
+    BuildMI(LoopBB, DL, TII.get(CBC::JMP)).addMBB(LoadBB);
+
+    Register OldSucc = MRI.createVirtualRegister(&CBC::GPRRegClass);
+    Register OkSucc = MRI.createVirtualRegister(&CBC::GPRRegClass);
+    BuildMI(SuccBB, DL, TII.get(CBC::MOV64rr), OldSucc).addReg(Exp);
+    BuildMI(SuccBB, DL, TII.get(CBC::MOV64rr), OkSucc).addReg(One);
+    BuildMI(SuccBB, DL, TII.get(CBC::JMP)).addMBB(DoneBB);
+
+    Register Cur = MRI.createVirtualRegister(&CBC::GPRRegClass);
+    BuildMI(LoadBB, DL, TII.get(LdOpc), Cur).addReg(Ptr);
+    Register CmpL = Cur;
+    Register CmpR = Exp;
+    if (WidthMask) {
+      Register MaskReg = MRI.createVirtualRegister(&CBC::GPRRegClass);
+      Register MaskedCur = MRI.createVirtualRegister(&CBC::GPRRegClass);
+      Register MaskedExp = MRI.createVirtualRegister(&CBC::GPRRegClass);
+      BuildMI(LoadBB, DL, TII.get(CBC::MOV64ri), MaskReg).addImm(WidthMask);
+      BuildMI(LoadBB, DL, TII.get(CBC::AND64rr), MaskedCur)
+          .addReg(Cur)
+          .addReg(MaskReg);
+      BuildMI(LoadBB, DL, TII.get(CBC::AND64rr), MaskedExp)
+          .addReg(Exp)
+          .addReg(MaskReg);
+      CmpL = MaskedCur;
+      CmpR = MaskedExp;
+    }
+    // if (cur & mask) == (exp & mask) → another thread wrote expected back; retry
+    BuildMI(LoadBB, DL, TII.get(CBC::BCC64))
+        .addImm(0) // SETEQ
+        .addReg(CmpL)
+        .addReg(CmpR)
+        .addMBB(LoopBB);
+    BuildMI(LoadBB, DL, TII.get(CBC::JMP)).addMBB(FailBB);
+
+    Register OldFail = MRI.createVirtualRegister(&CBC::GPRRegClass);
+    Register OkFail = MRI.createVirtualRegister(&CBC::GPRRegClass);
+    BuildMI(FailBB, DL, TII.get(CBC::MOV64rr), OldFail).addReg(Cur);
+    BuildMI(FailBB, DL, TII.get(CBC::MOV64rr), OkFail).addReg(Zero);
+    BuildMI(FailBB, DL, TII.get(CBC::JMP)).addMBB(DoneBB);
+
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII.get(TargetOpcode::PHI), DestOk)
+        .addReg(OkSucc)
+        .addMBB(SuccBB)
+        .addReg(OkFail)
+        .addMBB(FailBB);
+    BuildMI(*DoneBB, DoneBB->begin(), DL, TII.get(TargetOpcode::PHI), DestOld)
+        .addReg(OldSucc)
+        .addMBB(SuccBB)
+        .addReg(OldFail)
+        .addMBB(FailBB);
+    MI.eraseFromParent();
+    return DoneBB;
+  }
+
   if (Opc != CBC::SELECT_GPR && Opc != CBC::SELECT_FPR &&
       Opc != CBC::SELECT_FPR_I)
     report_fatal_error("CBC custom inserter: unexpected instruction");
   bool ResFloat = Opc != CBC::SELECT_GPR;
   bool CmpFloat = Opc == CBC::SELECT_FPR;
-  const TargetInstrInfo &TII = *MBB->getParent()->getSubtarget().getInstrInfo();
-  DebugLoc DL = MI.getDebugLoc();
   Register Dest = MI.getOperand(0).getReg();
-  MachineFunction *MF = MBB->getParent();
   MachineBasicBlock *TBB = MF->CreateMachineBasicBlock(MBB->getBasicBlock());
   MachineBasicBlock *FBB = MF->CreateMachineBasicBlock(MBB->getBasicBlock());
   MachineBasicBlock *Join = MF->CreateMachineBasicBlock(MBB->getBasicBlock());
@@ -391,7 +557,6 @@ MachineBasicBlock *CBCTargetLowering::EmitInstrWithCustomInserter(
   MBB->addSuccessor(FBB);
   TBB->addSuccessor(Join);
   FBB->addSuccessor(Join);
-  MachineRegisterInfo &MRI = MF->getRegInfo();
   const TargetRegisterClass *RC =
       ResFloat ? &CBC::FPRRegClass : &CBC::GPRRegClass;
   Register TT = MRI.createVirtualRegister(RC);

@@ -73,6 +73,9 @@ public:
     addPass(createIndirectBrExpandPass());
     addPass(createCBCLowerEHPass());
     addPass(createCBCLowerGlobalsPass());
+    // After LowerGlobals so fence→atomicrmw rewriting is visible; expands
+    // nand/min/max/FP RMW to cmpxchg and >64-bit atomics to libcalls.
+    addPass(createAtomicExpandLegacyPass());
     addPass(createCBCSynthesizeEntryPass());
     addPass(createCBCLowerSjLjPass());
     TargetPassConfig::addIRPasses();

@@ -53,6 +53,156 @@ class CBCAsmPrinter : public AsmPrinter {
     }
   }
 
+  /// True when cbc.image MD has a non-zero SizeBytes (same predicate as
+  /// CBCFileWriter). Data.image occupies FRef 0 when present.
+  /// Do not use AsmPrinter::MF here: CBC runOnMachineFunction shadows that
+  /// member and never installs it on the non-text path.
+  static bool moduleHasImage(const Module *M) {
+    if (!M)
+      return false;
+    NamedMDNode *MD = M->getNamedMetadata("cbc.image");
+    if (!MD || !MD->getNumOperands())
+      return false;
+    MDNode *Node = MD->getOperand(0);
+    if (!Node->getNumOperands())
+      return false;
+    auto *CAM = dyn_cast<ConstantAsMetadata>(Node->getOperand(0));
+    if (!CAM)
+      return false;
+    return cast<ConstantInt>(CAM->getValue())->getZExtValue() != 0;
+  }
+
+  /// Field-ref index of $cbc:A{8,16,32,64}.v (after Data.image when present).
+  static unsigned atomicFieldRef(const Module *M, unsigned WidthBits) {
+    unsigned Base = moduleHasImage(M) ? 1 : 0;
+    switch (WidthBits) {
+    case 8:
+      return Base + 0;
+    case 16:
+      return Base + 1;
+    case 32:
+      return Base + 2;
+    case 64:
+      return Base + 3;
+    default:
+      report_fatal_error("CBC atomic width must be 8/16/32/64");
+    }
+  }
+
+  bool encodeAtomic(const MachineInstr &MI, SmallVectorImpl<char> &Buf) {
+    unsigned Opc = MI.getOpcode();
+    unsigned IsaOpc = 0;
+    unsigned Width = 0;
+    bool IsStore = false;
+    bool IsCas = false;
+    bool IsFetch = false;
+    auto match = [&](unsigned W, unsigned LD, unsigned ST, unsigned CAS,
+                     unsigned XCHG, unsigned FADD, unsigned FSUB, unsigned FAND,
+                     unsigned FOR, unsigned FXOR) {
+      if (Opc == LD) {
+        IsaOpc = 0x65;
+        Width = W;
+        return true;
+      }
+      if (Opc == ST) {
+        IsaOpc = 0x66;
+        Width = W;
+        IsStore = true;
+        return true;
+      }
+      if (Opc == CAS) {
+        IsaOpc = 0x67;
+        Width = W;
+        IsCas = true;
+        return true;
+      }
+      if (Opc == XCHG) {
+        IsaOpc = 0x68;
+        Width = W;
+        IsFetch = true;
+        return true;
+      }
+      if (Opc == FADD) {
+        IsaOpc = 0x69;
+        Width = W;
+        IsFetch = true;
+        return true;
+      }
+      if (Opc == FSUB) {
+        IsaOpc = 0x6A;
+        Width = W;
+        IsFetch = true;
+        return true;
+      }
+      if (Opc == FAND) {
+        IsaOpc = 0x6B;
+        Width = W;
+        IsFetch = true;
+        return true;
+      }
+      if (Opc == FOR) {
+        IsaOpc = 0x6C;
+        Width = W;
+        IsFetch = true;
+        return true;
+      }
+      if (Opc == FXOR) {
+        IsaOpc = 0x6D;
+        Width = W;
+        IsFetch = true;
+        return true;
+      }
+      return false;
+    };
+    if (!match(8, CBC::ATOMIC_LD_8, CBC::ATOMIC_ST_8, CBC::ATOMIC_CAS_8,
+               CBC::ATOMIC_XCHG_8, CBC::ATOMIC_FADD_8, CBC::ATOMIC_FSUB_8,
+               CBC::ATOMIC_FAND_8, CBC::ATOMIC_FOR_8, CBC::ATOMIC_FXOR_8) &&
+        !match(16, CBC::ATOMIC_LD_16, CBC::ATOMIC_ST_16, CBC::ATOMIC_CAS_16,
+               CBC::ATOMIC_XCHG_16, CBC::ATOMIC_FADD_16, CBC::ATOMIC_FSUB_16,
+               CBC::ATOMIC_FAND_16, CBC::ATOMIC_FOR_16, CBC::ATOMIC_FXOR_16) &&
+        !match(32, CBC::ATOMIC_LD_32, CBC::ATOMIC_ST_32, CBC::ATOMIC_CAS_32,
+               CBC::ATOMIC_XCHG_32, CBC::ATOMIC_FADD_32, CBC::ATOMIC_FSUB_32,
+               CBC::ATOMIC_FAND_32, CBC::ATOMIC_FOR_32, CBC::ATOMIC_FXOR_32) &&
+        !match(64, CBC::ATOMIC_LD_64, CBC::ATOMIC_ST_64, CBC::ATOMIC_CAS_64,
+               CBC::ATOMIC_XCHG_64, CBC::ATOMIC_FADD_64, CBC::ATOMIC_FSUB_64,
+               CBC::ATOMIC_FAND_64, CBC::ATOMIC_FOR_64, CBC::ATOMIC_FXOR_64))
+      return false;
+
+    const MachineFunction *MFunc = MI.getMF();
+    const Module *Mod =
+        MFunc ? MFunc->getFunction().getParent() : nullptr;
+    unsigned FRef = atomicFieldRef(Mod, Width);
+    Buf.push_back(static_cast<char>(IsaOpc));
+    if (IsStore) {
+      // 66 [s:p] uleb(f)
+      unsigned S = cbcEncodeReg(MI.getOperand(0).getReg());
+      unsigned P = cbcEncodeReg(MI.getOperand(1).getReg());
+      Buf.push_back(static_cast<char>((S << 4) | (P & 0xF)));
+    } else if (IsCas) {
+      // 67 [d:p] [exp:new] uleb(f)
+      unsigned D = cbcEncodeReg(MI.getOperand(0).getReg());
+      unsigned P = cbcEncodeReg(MI.getOperand(1).getReg());
+      unsigned Exp = cbcEncodeReg(MI.getOperand(2).getReg());
+      unsigned New = cbcEncodeReg(MI.getOperand(3).getReg());
+      Buf.push_back(static_cast<char>((D << 4) | (P & 0xF)));
+      Buf.push_back(static_cast<char>((Exp << 4) | (New & 0xF)));
+    } else if (IsFetch) {
+      // 68..6D [d:p] [s:0] uleb(f)
+      unsigned D = cbcEncodeReg(MI.getOperand(0).getReg());
+      unsigned P = cbcEncodeReg(MI.getOperand(1).getReg());
+      unsigned S = cbcEncodeReg(MI.getOperand(2).getReg());
+      Buf.push_back(static_cast<char>((D << 4) | (P & 0xF)));
+      Buf.push_back(static_cast<char>((S << 4) | 0));
+    } else {
+      // 65 [d:p] uleb(f)
+      unsigned D = cbcEncodeReg(MI.getOperand(0).getReg());
+      unsigned P = cbcEncodeReg(MI.getOperand(1).getReg());
+      Buf.push_back(static_cast<char>((D << 4) | (P & 0xF)));
+    }
+    appendULEB(Buf, FRef);
+    return true;
+  }
+
   void encodeFnPtr(const MachineInstr &MI, SmallVectorImpl<char> &Buf) {
     const GlobalValue *GV = nullptr;
     Register Dest;
@@ -147,6 +297,8 @@ class CBCAsmPrinter : public AsmPrinter {
       encodeFnPtr(MI, Buf);
       return;
     }
+    if (encodeAtomic(MI, Buf))
+      return;
     MCInst Inst;
     Inst.setOpcode(MI.getOpcode());
     for (const MachineOperand &MO : MI.operands()) {

@@ -135,6 +135,10 @@ torture_excluded() {
     pr94591.c) return 0 ;;
     # _FloatN / __bf16 suffixes and types are not supported on this target.
     bfloat16-builtin-issignaling-1.c|float128-builtin-issignaling-1.c|float128x-builtin-issignaling-1.c|float16-builtin-issignaling-1.c|float32-builtin-issignaling-1.c|float32x-builtin-issignaling-1.c|float64-builtin-issignaling-1.c|float64x-builtin-issignaling-1.c) return 0 ;;
+    # long double is x86_fp80 on this target; CBC has no x86_fp80 / fp128.
+    # (memcpy/memset/strcmp/strcpy/strlen/strncmp cases fail on long double
+    # objects, not on the string/memory ops themselves.)
+    20010605-2.c|20020413-1.c|20030914-1.c|20040709-1.c|20040709-2.c|20040709-3.c|20050121-1.c|20080502-1.c|930622-2.c|960215-1.c|960405-1.c|960513-1.c|align-2.c|complex-6.c|complex-7.c|conversion.c|memcpy-2.c|memset-1.c|memset-2.c|memset-3.c|pr44942.c|regstack-1.c|stdarg-1.c|stdarg-2.c|strcmp-1.c|strcpy-1.c|strlen-1.c|strncmp-1.c|va-arg-5.c|va-arg-6.c|20010226-1.c|builtin-issignaling-1.c|cdivchkld.c|copysign1.c|copysign2.c|fp-cmp-4l.c|fp-cmp-8l.c|inf-2.c|inf-3.c|pr36332.c) return 0 ;;
     # signal() would call a CBC handler from native code.
     fp-cmp-1.c|fp-cmp-2.c|fp-cmp-3.c) return 0 ;;
     # scalar_storage_order is a GCC attribute. Clang ignores it, so the
