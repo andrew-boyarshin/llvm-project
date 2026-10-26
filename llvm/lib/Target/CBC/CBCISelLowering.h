@@ -2,6 +2,7 @@
 #define LLVM_LIB_TARGET_CBC_CBCISELLOWERING_H
 
 #include "llvm/CodeGen/TargetLowering.h"
+#include <cstdint>
 
 namespace llvm {
 class CBCSubtarget;
@@ -43,6 +44,22 @@ public:
   // for CBC W32 values (bits 63:32 undefined after Binary32).
   bool isIntDivCheap(EVT VT, AttributeList) const override {
     return VT == MVT::i32 || VT == MVT::i64;
+  }
+  // [base + disp] only. Engine rewrite truncates disp to uint32; no index.
+  bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM,
+                             Type *Ty, unsigned AddrSpace,
+                             Instruction *I = nullptr) const override {
+    (void)DL;
+    (void)Ty;
+    (void)AddrSpace;
+    (void)I;
+    if (AM.BaseGV || AM.ScalableOffset)
+      return false;
+    if (AM.Scale != 0)
+      return false;
+    if (AM.BaseOffs < 0 || static_cast<uint64_t>(AM.BaseOffs) > UINT32_MAX)
+      return false;
+    return true;
   }
   // Unaligned i16 must stay a single SEXTLOAD. If LegalizeDAG splits it into
   // two i8 ZEXTLOADs + OR, the sign bit of a packed/unaligned short is lost.

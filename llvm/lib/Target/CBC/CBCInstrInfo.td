@@ -3,7 +3,7 @@ class CBCInst<dag outs, dag ins, string asmstr> : Instruction {
   let OutOperandList = outs;
   let InOperandList = ins;
   let AsmString = asmstr;
-  let Size = 1;
+  // Variable-length SLEB encodings: size is not knowable from the opcode.
 }
 
 def MOV64rr : CBCInst<(outs GPR:$d), (ins GPR:$s), "mov.W64 $d, $s">;
@@ -65,6 +65,10 @@ def JMP : CBCInst<(outs), (ins variable_ops), "jump"> {
   let isTerminator = 1;
   let isBarrier = 1;
 }
+def BCC32 : CBCInst<(outs), (ins i32imm:$cc, GPR:$l, GPR:$r, variable_ops), "bcc32 $l, $r"> {
+  let isBranch = 1;
+  let isTerminator = 1;
+}
 def BCC64 : CBCInst<(outs), (ins i32imm:$cc, GPR:$l, GPR:$r, variable_ops), "bcc64 $l, $r"> {
   let isBranch = 1;
   let isTerminator = 1;
@@ -73,6 +77,7 @@ def BCCF : CBCInst<(outs), (ins i32imm:$cc, FPR:$l, FPR:$r, i32imm:$f32, variabl
   let isBranch = 1;
   let isTerminator = 1;
 }
+def SCC32 : CBCInst<(outs GPR:$d), (ins i32imm:$cc, GPR:$l, GPR:$r), "scc32 $d, $l, $r">;
 def SCC64 : CBCInst<(outs GPR:$d), (ins i32imm:$cc, GPR:$l, GPR:$r), "scc64 $d, $l, $r">;
 def SCCF : CBCInst<(outs GPR:$d), (ins i32imm:$cc, FPR:$l, FPR:$r, i32imm:$f32), "sccf $d, $l, $r">;
 
@@ -129,7 +134,8 @@ def CALL : CBCInst<(outs), (ins variable_ops), "call.direct"> {
 }
 
 def SELECT_GPR : CBCInst<(outs GPR:$d),
-    (ins i32imm:$cc, GPR:$l, GPR:$r, GPR:$t, GPR:$f), "select $d, $l, $r"> {
+    (ins i32imm:$cc, GPR:$l, GPR:$r, GPR:$t, GPR:$f, i32imm:$w32),
+    "select $d, $l, $r"> {
   let usesCustomInserter = 1;
 }
 def SELECT_FPR : CBCInst<(outs FPR:$d),

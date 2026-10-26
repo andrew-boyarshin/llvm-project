@@ -5,7 +5,9 @@
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cstdint>
 
 using namespace llvm;
 
@@ -102,6 +104,16 @@ static bool cbcSignedCond(ISD::CondCode CC) {
   }
 }
 
+// Materialize an immediate for a compare operand (IRZ for 0, else MOV64ri).
+static SDValue cbcMaterializeImm(SelectionDAG &DAG, const SDLoc &DL,
+                                 uint64_t Bits) {
+  if (Bits == 0)
+    return DAG.getRegister(CBC::IRZ, MVT::i64);
+  return SDValue(DAG.getMachineNode(CBC::MOV64ri, DL, MVT::i64,
+                                    DAG.getTargetConstant(Bits, DL, MVT::i64)),
+                 0);
+}
+
 // Native i32 results only define the low 32 bits (the high half of rax is
 // zeroed, so -1 arrives as 0xffffffff). Widen before a 64-bit compare.
 static SDValue cbcExtendToI64(SelectionDAG &DAG, const SDLoc &DL, SDValue V,
@@ -111,11 +123,7 @@ static SDValue cbcExtendToI64(SelectionDAG &DAG, const SDLoc &DL, SDValue V,
   if (auto *C = dyn_cast<ConstantSDNode>(V)) {
     int64_t SExt = C->getSExtValue();
     uint64_t Bits = Signed ? static_cast<uint64_t>(SExt) : C->getZExtValue();
-    if (Bits == 0)
-      return DAG.getRegister(CBC::IRZ, MVT::i64);
-    return SDValue(DAG.getMachineNode(CBC::MOV64ri, DL, MVT::i64,
-                                      DAG.getTargetConstant(Bits, DL, MVT::i64)),
-                   0);
+    return cbcMaterializeImm(DAG, DL, Bits);
   }
   EVT VT = V.getValueType();
   if (VT == MVT::i64)
@@ -126,6 +134,46 @@ static SDValue cbcExtendToI64(SelectionDAG &DAG, const SDLoc &DL, SDValue V,
   SDNode *Shl = DAG.getMachineNode(CBC::SHL64ri, DL, MVT::i64, V, Sh);
   unsigned Opc = Signed ? CBC::SRA64ri : CBC::SRL64ri;
   return SDValue(DAG.getMachineNode(Opc, DL, MVT::i64, SDValue(Shl, 0), Sh), 0);
+}
+
+// Fold constant adds into ld/st.raw.mem displacement. Engine rewrite truncates
+// offsets to uint32, so only accept 0..UINT32_MAX. Walk already-selected
+// ADD64ri (Select() converts ADD before LOAD) as well as ISD::ADD.
+static void cbcSelectAddr(SDValue Addr, SDValue &Base, int64_t &Disp) {
+  Base = Addr;
+  Disp = 0;
+  for (unsigned Depth = 0; Depth < 8; ++Depth) {
+    if (Base.getOpcode() == ISD::ADD) {
+      SDValue Op0 = Base.getOperand(0), Op1 = Base.getOperand(1);
+      SDValue Next;
+      ConstantSDNode *C = nullptr;
+      if ((C = dyn_cast<ConstantSDNode>(Op1)))
+        Next = Op0;
+      else if ((C = dyn_cast<ConstantSDNode>(Op0)))
+        Next = Op1;
+      else
+        break;
+      int64_t Off = C->getSExtValue();
+      int64_t Sum = Disp + Off;
+      if (Sum < 0 || static_cast<uint64_t>(Sum) > UINT32_MAX)
+        break;
+      Disp = Sum;
+      Base = Next;
+      continue;
+    }
+    if (!Base.isMachineOpcode() || Base.getMachineOpcode() != CBC::ADD64ri)
+      break;
+    // ADD64ri: dst, lhs, imm
+    auto *C = dyn_cast<ConstantSDNode>(Base.getOperand(1));
+    if (!C)
+      break;
+    int64_t Off = C->getSExtValue();
+    int64_t Sum = Disp + Off;
+    if (Sum < 0 || static_cast<uint64_t>(Sum) > UINT32_MAX)
+      break;
+    Disp = Sum;
+    Base = Base.getOperand(0);
+  }
 }
 
 #define DEBUG_TYPE "cbc-isel"
@@ -340,11 +388,25 @@ public:
         return;
       }
       bool Signed = cbcSignedCond(CC);
-      L = cbcExtendToI64(*CurDAG, DL, L, Signed);
-      R = cbcExtendToI64(*CurDAG, DL, R, Signed);
+      bool UseW32 = L.getValueType() == MVT::i32 && R.getValueType() == MVT::i32;
+      auto prepInt = [&](SDValue V) -> SDValue {
+        if (auto *C = dyn_cast<ConstantSDNode>(V)) {
+          uint64_t Bits =
+              Signed ? static_cast<uint64_t>(C->getSExtValue()) : C->getZExtValue();
+          // BCC32 only needs the low 32 bits of the immediate.
+          if (UseW32)
+            Bits &= 0xFFFFFFFFu;
+          return cbcMaterializeImm(*CurDAG, DL, Bits);
+        }
+        if (UseW32)
+          return V;
+        return cbcExtendToI64(*CurDAG, DL, V, Signed);
+      };
+      L = prepInt(L);
+      R = prepInt(R);
       SDValue Ops[] = {CurDAG->getTargetConstant(Code, DL, MVT::i32), L, R,
                        CurDAG->getBasicBlock(Tgt), N->getOperand(0)};
-      CurDAG->SelectNodeTo(N, CBC::BCC64, MVT::Other, Ops);
+      CurDAG->SelectNodeTo(N, UseW32 ? CBC::BCC32 : CBC::BCC64, MVT::Other, Ops);
       return;
     }
     case ISD::SELECT_CC: {
@@ -372,6 +434,7 @@ public:
         T = AsInt(T);
         F = AsInt(F);
       }
+      SDValue W32False = CurDAG->getTargetConstant(0, DL, MVT::i32);
       if (!cbcMapCond(CC, CmpFloat, Code, Swap)) {
         SDValue Flag = cbcMaterializeCond(*CurDAG, DL, CC, CmpL, CmpR);
         SDValue Zero = CurDAG->getRegister(CBC::IRZ, MVT::i64);
@@ -380,8 +443,9 @@ public:
                            Zero, T, F};
           CurDAG->SelectNodeTo(N, CBC::SELECT_FPR_I, N->getValueType(0), Ops);
         } else {
+          // Flag is a clean i64 0/1 from SCCF; BCC64 is fine.
           SDValue Ops[] = {CurDAG->getTargetConstant(1, DL, MVT::i32), Flag,
-                           Zero, T, F};
+                           Zero, T, F, W32False};
           CurDAG->SelectNodeTo(N, CBC::SELECT_GPR, N->getValueType(0), Ops);
         }
         return;
@@ -393,12 +457,15 @@ public:
         SDValue Flag = cbcScc(*CurDAG, DL, Code, CmpL, CmpR);
         SDValue Zero = CurDAG->getRegister(CBC::IRZ, MVT::i64);
         SDValue Ops[] = {CurDAG->getTargetConstant(1, DL, MVT::i32), Flag, Zero,
-                         T, F};
+                         T, F, W32False};
         CurDAG->SelectNodeTo(N, CBC::SELECT_GPR, N->getValueType(0), Ops);
         return;
       }
+      bool UseW32 = false;
       if (!CmpFloat) {
         bool Signed = cbcSignedCond(CC);
+        UseW32 = CmpL.getValueType() == MVT::i32 &&
+                 CmpR.getValueType() == MVT::i32;
         // A narrow unsigned constant must be zero-extended. Sign-extending
         // i32 -24 and then comparing it as i64 makes ult true for every
         // zero-extended 32-bit value.
@@ -408,14 +475,12 @@ public:
             uint64_t SBits = static_cast<uint64_t>(C->getSExtValue());
             uint64_t ZBits = C->getZExtValue();
             uint64_t Bits = (!Signed && Width < 64) ? ZBits : SBits;
-            if (Bits == 0)
-              return CurDAG->getRegister(CBC::IRZ, MVT::i64);
-            return SDValue(
-                CurDAG->getMachineNode(
-                    CBC::MOV64ri, DL, MVT::i64,
-                    CurDAG->getTargetConstant(Bits, DL, MVT::i64)),
-                0);
+            if (UseW32)
+              Bits &= 0xFFFFFFFFu;
+            return cbcMaterializeImm(*CurDAG, DL, Bits);
           }
+          if (UseW32)
+            return V;
           return cbcExtendToI64(*CurDAG, DL, V, Signed);
         };
         CmpL = materializeCmp(CmpL);
@@ -431,7 +496,9 @@ public:
         SDValue Ops[] = {CCImm, CmpL, CmpR, T, F};
         CurDAG->SelectNodeTo(N, CBC::SELECT_FPR_I, N->getValueType(0), Ops);
       } else {
-        SDValue Ops[] = {CCImm, CmpL, CmpR, T, F};
+        SDValue Ops[] = {
+            CCImm, CmpL, CmpR, T, F,
+            CurDAG->getTargetConstant(UseW32 ? 1 : 0, DL, MVT::i32)};
         CurDAG->SelectNodeTo(N, CBC::SELECT_GPR, N->getValueType(0), Ops);
       }
       return;
@@ -458,9 +525,22 @@ public:
         return;
       }
       bool Signed = cbcSignedCond(CC);
-      L = cbcExtendToI64(*CurDAG, DL, L, Signed);
-      R = cbcExtendToI64(*CurDAG, DL, R, Signed);
-      CurDAG->SelectNodeTo(N, CBC::SCC64, N->getValueType(0),
+      bool UseW32 = L.getValueType() == MVT::i32 && R.getValueType() == MVT::i32;
+      auto prepInt = [&](SDValue V) -> SDValue {
+        if (auto *C = dyn_cast<ConstantSDNode>(V)) {
+          uint64_t Bits =
+              Signed ? static_cast<uint64_t>(C->getSExtValue()) : C->getZExtValue();
+          if (UseW32)
+            Bits &= 0xFFFFFFFFu;
+          return cbcMaterializeImm(*CurDAG, DL, Bits);
+        }
+        if (UseW32)
+          return V;
+        return cbcExtendToI64(*CurDAG, DL, V, Signed);
+      };
+      L = prepInt(L);
+      R = prepInt(R);
+      CurDAG->SelectNodeTo(N, UseW32 ? CBC::SCC32 : CBC::SCC64, N->getValueType(0),
                            CurDAG->getTargetConstant(Code, DL, MVT::i32), L, R);
       return;
     }
@@ -567,6 +647,10 @@ public:
       auto *Ld = cast<LoadSDNode>(N);
       if (Ld->isIndexed() || Ld->getAddressingMode() != ISD::UNINDEXED)
         break;
+      SDValue Base;
+      int64_t Disp = 0;
+      cbcSelectAddr(Ld->getBasePtr(), Base, Disp);
+      SDValue DispImm = CurDAG->getTargetConstant(Disp, DL, MVT::i64);
       unsigned Opc = CBC::LDRAW64;
       if (Ld->getMemoryVT() == MVT::i8 || Ld->getMemoryVT() == MVT::i1) {
         Opc = CBC::LDRAW8;
@@ -576,9 +660,7 @@ public:
         if (Ld->getExtensionType() == ISD::SEXTLOAD) {
           unsigned Width =
               Ld->getMemoryVT() == MVT::i1 ? 1 : 8;
-          SDValue Ops[] = {Ld->getBasePtr(),
-                           CurDAG->getTargetConstant(0, DL, MVT::i64),
-                           Ld->getChain()};
+          SDValue Ops[] = {Base, DispImm, Ld->getChain()};
           SDNode *Raw = CurDAG->getMachineNode(CBC::LDRAW8, DL, MVT::i64,
                                                MVT::Other, Ops);
           SDValue Sh = CurDAG->getTargetConstant(64 - Width, DL, MVT::i64);
@@ -592,16 +674,23 @@ public:
           return;
         }
       } else if (Ld->getMemoryVT() == MVT::i16) {
-        SDValue Base = Ld->getBasePtr();
         SDValue Chain = Ld->getChain();
-        SDValue Disp = CurDAG->getTargetConstant(0, DL, MVT::i64);
-        SDValue One = CurDAG->getTargetConstant(1, DL, MVT::i64);
-        SDNode *PtrHi =
-            CurDAG->getMachineNode(CBC::ADD64ri, DL, MVT::i64, Base, One);
-        SDValue LoOps[] = {Base, Disp, Chain};
+        // High byte at Disp+1; stay in uint32 range or fall back to addi.
+        int64_t DispHi = Disp + 1;
+        SDValue LoDisp = DispImm;
+        SDValue HiBase = Base;
+        SDValue HiDisp = CurDAG->getTargetConstant(DispHi, DL, MVT::i64);
+        if (DispHi < 0 || static_cast<uint64_t>(DispHi) > UINT32_MAX) {
+          HiBase = SDValue(
+              CurDAG->getMachineNode(CBC::ADD64ri, DL, MVT::i64, Base,
+                                     CurDAG->getTargetConstant(1, DL, MVT::i64)),
+              0);
+          HiDisp = CurDAG->getTargetConstant(0, DL, MVT::i64);
+        }
+        SDValue LoOps[] = {Base, LoDisp, Chain};
         SDNode *Lo = CurDAG->getMachineNode(CBC::LDRAW8, DL, MVT::i64, MVT::Other,
                                             LoOps);
-        SDValue HiOps[] = {SDValue(PtrHi, 0), Disp, SDValue(Lo, 1)};
+        SDValue HiOps[] = {HiBase, HiDisp, SDValue(Lo, 1)};
         SDNode *Hi = CurDAG->getMachineNode(CBC::LDRAW8, DL, MVT::i64, MVT::Other,
                                             HiOps);
         SDValue Mask = CurDAG->getTargetConstant(0xFF, DL, MVT::i64);
@@ -630,9 +719,7 @@ public:
         Opc = CBC::LDRAW32;
         if (Ld->getExtensionType() == ISD::SEXTLOAD &&
             Ld->getValueType(0) == MVT::i64) {
-          SDValue Ops[] = {Ld->getBasePtr(),
-                           CurDAG->getTargetConstant(0, DL, MVT::i64),
-                           Ld->getChain()};
+          SDValue Ops[] = {Base, DispImm, Ld->getChain()};
           SDNode *Raw = CurDAG->getMachineNode(CBC::LDRAW32, DL, MVT::i64,
                                                MVT::Other, Ops);
           SDValue Sh = CurDAG->getTargetConstant(32, DL, MVT::i64);
@@ -646,9 +733,7 @@ public:
           return;
         }
       } else if (Ld->getMemoryVT() == MVT::f32) {
-        SDValue Ops[] = {Ld->getBasePtr(),
-                         CurDAG->getTargetConstant(0, DL, MVT::i64),
-                         Ld->getChain()};
+        SDValue Ops[] = {Base, DispImm, Ld->getChain()};
         SDNode *Raw = CurDAG->getMachineNode(CBC::LDRAWF32, DL, MVT::f32,
                                              MVT::Other, Ops);
         SDValue Val = SDValue(Raw, 0);
@@ -665,9 +750,7 @@ public:
         Opc = CBC::LDRAWF64;
       else if (Ld->getMemoryVT() != MVT::i64)
         break;
-      SDValue Ops[] = {Ld->getBasePtr(),
-                       CurDAG->getTargetConstant(0, DL, MVT::i64),
-                       Ld->getChain()};
+      SDValue Ops[] = {Base, DispImm, Ld->getChain()};
       CurDAG->SelectNodeTo(N, Opc, Ld->getValueType(0), MVT::Other, Ops);
       return;
     }
@@ -675,24 +758,32 @@ public:
       auto *St = cast<StoreSDNode>(N);
       if (St->isIndexed() || St->getAddressingMode() != ISD::UNINDEXED)
         break;
+      SDValue Base;
+      int64_t Disp = 0;
+      cbcSelectAddr(St->getBasePtr(), Base, Disp);
+      SDValue DispImm = CurDAG->getTargetConstant(Disp, DL, MVT::i64);
       unsigned Opc = CBC::STRAW64;
       if (St->getMemoryVT() == MVT::i8 || St->getMemoryVT() == MVT::i1)
         Opc = CBC::STRAW8;
       else if (St->getMemoryVT() == MVT::i16) {
         SDValue Val = St->getValue();
-        SDValue Base = St->getBasePtr();
         SDValue Chain = St->getChain();
         SDValue Sh = CurDAG->getTargetConstant(8, DL, MVT::i64);
         SDNode *Hi = CurDAG->getMachineNode(CBC::SRL64ri, DL, MVT::i64, Val, Sh);
-        SDValue One = CurDAG->getTargetConstant(1, DL, MVT::i64);
-        SDNode *PtrHi =
-            CurDAG->getMachineNode(CBC::ADD64ri, DL, MVT::i64, Base, One);
-        SDValue Disp = CurDAG->getTargetConstant(0, DL, MVT::i64);
-        SDValue LoOps[] = {Val, Base, Disp, Chain};
+        int64_t DispHi = Disp + 1;
+        SDValue HiBase = Base;
+        SDValue HiDisp = CurDAG->getTargetConstant(DispHi, DL, MVT::i64);
+        if (DispHi < 0 || static_cast<uint64_t>(DispHi) > UINT32_MAX) {
+          HiBase = SDValue(
+              CurDAG->getMachineNode(CBC::ADD64ri, DL, MVT::i64, Base,
+                                     CurDAG->getTargetConstant(1, DL, MVT::i64)),
+              0);
+          HiDisp = CurDAG->getTargetConstant(0, DL, MVT::i64);
+        }
+        SDValue LoOps[] = {Val, Base, DispImm, Chain};
         SDNode *LoSt =
             CurDAG->getMachineNode(CBC::STRAW8, DL, MVT::Other, LoOps);
-        SDValue HiOps[] = {SDValue(Hi, 0), SDValue(PtrHi, 0), Disp,
-                           SDValue(LoSt, 0)};
+        SDValue HiOps[] = {SDValue(Hi, 0), HiBase, HiDisp, SDValue(LoSt, 0)};
         SDNode *HiSt =
             CurDAG->getMachineNode(CBC::STRAW8, DL, MVT::Other, HiOps);
         ReplaceUses(SDValue(N, 0), SDValue(HiSt, 0));
@@ -706,9 +797,7 @@ public:
         Opc = CBC::STRAWF64;
       else if (St->getMemoryVT() != MVT::i64)
         break;
-      SDValue Ops[] = {St->getValue(), St->getBasePtr(),
-                       CurDAG->getTargetConstant(0, DL, MVT::i64),
-                       St->getChain()};
+      SDValue Ops[] = {St->getValue(), Base, DispImm, St->getChain()};
       CurDAG->SelectNodeTo(N, Opc, MVT::Other, Ops);
       return;
     }

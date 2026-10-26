@@ -571,7 +571,9 @@ MachineBasicBlock *CBCTargetLowering::EmitInstrWithCustomInserter(
         .addImm(F32 ? 1 : 0)
         .addMBB(TBB);
   } else {
-    BuildMI(MBB, DL, TII.get(CBC::BCC64))
+    // SELECT_GPR: ops are dest, cc, l, r, t, f, w32
+    bool W32 = Opc == CBC::SELECT_GPR && MI.getOperand(6).getImm() != 0;
+    BuildMI(MBB, DL, TII.get(W32 ? CBC::BCC32 : CBC::BCC64))
         .addImm(MI.getOperand(1).getImm())
         .addReg(MI.getOperand(2).getReg())
         .addReg(MI.getOperand(3).getReg())

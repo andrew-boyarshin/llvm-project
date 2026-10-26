@@ -25,8 +25,10 @@ add_llvm_target(CBCCodeGen
   CBCSynthesizeEntry.cpp
   CBCTargetMachine.cpp
   CBCTargetObjectFile.cpp
+  CBCTargetTransformInfo.cpp
 
   LINK_COMPONENTS
+  Analysis
   AsmPrinter
   CodeGen
   CodeGenTypes
@@ -39,6 +41,7 @@ add_llvm_target(CBCCodeGen
   Support
   Target
   TargetParser
+  TransformUtils
 
   ADD_TO_COMPONENT CBC
 )

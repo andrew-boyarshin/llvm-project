@@ -1,6 +1,7 @@
 #include "CBCTargetMachine.h"
 #include "CBC.h"
 #include "CBCTargetObjectFile.h"
+#include "CBCTargetTransformInfo.h"
 #include "TargetInfo/CBCTargetInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/Passes.h"
@@ -59,6 +60,11 @@ MachineFunctionInfo *CBCTargetMachine::createMachineFunctionInfo(
     BumpPtrAllocator &Allocator, const Function &F,
     const TargetSubtargetInfo *STI) const {
   return MachineFunctionInfo::create<CBCMachineFunctionInfo>(Allocator, F, STI);
+}
+
+TargetTransformInfo
+CBCTargetMachine::getTargetTransformInfo(const Function &F) const {
+  return TargetTransformInfo(std::make_unique<CBCTTIImpl>(this, F));
 }
 
 namespace {

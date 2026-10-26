@@ -66,22 +66,28 @@ void CBCInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
 
 static bool isCBCBranch(const MachineInstr &MI) {
   unsigned Opc = MI.getOpcode();
-  return Opc == CBC::JMP || Opc == CBC::BCC64 || Opc == CBC::BCCF;
+  return Opc == CBC::JMP || Opc == CBC::BCC32 || Opc == CBC::BCC64 ||
+         Opc == CBC::BCCF;
 }
 
+// Cond is opcode-first so insertBranch can distinguish BCC32 from BCC64:
+//   BCC32/BCC64: [opcode, cc, l, r]   (size 4)
+//   BCCF:        [BCCF, cc, l, r, f32] (size 5)
 static bool analyzeCBCCondBranch(const MachineInstr &MI,
                                  MachineBasicBlock *&TBB,
                                  SmallVectorImpl<MachineOperand> &Cond) {
-  if (MI.getOpcode() == CBC::BCC64) {
+  unsigned Opc = MI.getOpcode();
+  if (Opc == CBC::BCC32 || Opc == CBC::BCC64) {
     TBB = MI.getOperand(3).getMBB();
+    Cond.push_back(MachineOperand::CreateImm(Opc));
     Cond.push_back(MI.getOperand(0));
     Cond.push_back(MI.getOperand(1));
     Cond.push_back(MI.getOperand(2));
     return true;
   }
-  if (MI.getOpcode() == CBC::BCCF) {
-    // Cond: cc, l, r, f32 — insertBranch distinguishes this from BCC64 by size.
+  if (Opc == CBC::BCCF) {
     TBB = MI.getOperand(4).getMBB();
+    Cond.push_back(MachineOperand::CreateImm(Opc));
     Cond.push_back(MI.getOperand(0));
     Cond.push_back(MI.getOperand(1));
     Cond.push_back(MI.getOperand(2));
@@ -147,19 +153,23 @@ unsigned CBCInstrInfo::insertBranch(MachineBasicBlock &MBB,
     BuildMI(&MBB, DL, get(CBC::JMP)).addMBB(TBB);
     return 1;
   }
-  if (Cond.size() == 4) {
+  assert(Cond[0].isImm() && "CBC branch Cond must start with opcode");
+  unsigned Opc = static_cast<unsigned>(Cond[0].getImm());
+  if (Opc == CBC::BCCF) {
+    assert(Cond.size() == 5 && "unexpected BCCF Cond");
     BuildMI(&MBB, DL, get(CBC::BCCF))
-        .addImm(Cond[0].getImm())
-        .addReg(Cond[1].getReg())
+        .addImm(Cond[1].getImm())
         .addReg(Cond[2].getReg())
-        .addImm(Cond[3].getImm())
+        .addReg(Cond[3].getReg())
+        .addImm(Cond[4].getImm())
         .addMBB(TBB);
   } else {
-    assert(Cond.size() == 3 && "unexpected CBC branch condition");
-    BuildMI(&MBB, DL, get(CBC::BCC64))
-        .addImm(Cond[0].getImm())
-        .addReg(Cond[1].getReg())
+    assert((Opc == CBC::BCC32 || Opc == CBC::BCC64) && Cond.size() == 4 &&
+           "unexpected CBC integer branch Cond");
+    BuildMI(&MBB, DL, get(Opc))
+        .addImm(Cond[1].getImm())
         .addReg(Cond[2].getReg())
+        .addReg(Cond[3].getReg())
         .addMBB(TBB);
   }
   if (!FBB)

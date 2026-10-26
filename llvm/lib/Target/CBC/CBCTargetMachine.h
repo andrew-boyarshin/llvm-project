@@ -4,6 +4,7 @@
 #include "CBCFileWriter.h"
 #include "CBCSubtarget.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include "llvm/CodeGen/MachineFunction.h"
 
@@ -32,6 +33,7 @@ public:
   TargetLoweringObjectFile *getObjFileLowering() const override {
     return TLOF.get();
   }
+  TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
   MachineFunctionInfo *
   createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
                             const TargetSubtargetInfo *STI) const override;

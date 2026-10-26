@@ -373,8 +373,8 @@ class CBCAsmPrinter : public AsmPrinter {
     E.Bytes.assign(Tmp.begin(), Tmp.end());
     E.IsCall = MI.getOpcode() == CBC::CALL ||
                MI.getOpcode() == CBC::CALL_INDIRECT;
-    if (MI.getOpcode() == CBC::JMP || MI.getOpcode() == CBC::BCC64 ||
-        MI.getOpcode() == CBC::BCCF) {
+    if (MI.getOpcode() == CBC::JMP || MI.getOpcode() == CBC::BCC32 ||
+        MI.getOpcode() == CBC::BCC64 || MI.getOpcode() == CBC::BCCF) {
       for (const MachineOperand &MO : MI.operands()) {
         if (MO.isMBB()) {
           E.Target = MO.getMBB();
