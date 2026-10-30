@@ -1,13 +1,20 @@
 # 13 — Accepted Engine Changes
 
 The original plan treated the engine as immutable. Eight engine changes have since
-been accepted. E1–E7 are small; E8 is the frame-memory and runtime-alloca change.
-This file specifies each one precisely enough to implement and review
-(they are **not implemented yet**), states what it changes for the compiler, and lists
+been accepted and **are implemented on the `cbc` branch** of
+`cbc-engine-initial-stage` (`add2c976`, forked from `4e4a8ed8`). E1–E7 are small;
+E8 is the frame-memory and runtime-alloca change. This file specifies each one
+as it exists on that branch, states what it changes for the compiler, and lists
 the suggestions that were **not** accepted, whose compiler-side workarounds therefore stay.
 
+E5 was originally specified as a non-executable in-engine descriptor region with
+native→CBC out of scope. That design was replaced on `cbc` by **N2C stubs**:
+every exported CBC method has a host-ELF callable entry that enters the
+interpreter, and `ld.fnptr` of a CBC method returns that stub address.
+§6, §8 and §9 below describe the N2C design, not the discarded descriptor region.
+
 Paths are relative to `cbc-engine-initial-stage/` unless stated otherwise. Line numbers
-refer to the revision analysed for this plan (`4e4a8ed8`).
+refer to the `cbc` branch unless noted.
 
 ## 0. Summary
 
@@ -17,16 +24,15 @@ refer to the revision analysed for this plan (`4e4a8ed8`).
 | **E2** | `BuildAbiInfo` sets `hasTailReg` when float parameters overflow to the stack | 1 line | the dummy-`I64` padding of signature terms |
 | **E3** | method-ref and field-ref pool sizes read as `uint32_t` | 2 lines | the 65 535 reference limit and the program-splitting mode it forced |
 | **E4** | the bytecode parser rejects unknown opcodes and stray prefixes with `FATAL` | ~5 lines | the infinite-loop failure mode (a safety fix; the compiler never emits such bytes) |
-| **E5** | new instruction `LoadFuncPtr dst, @mref` (`RegSymGroup` selector 13): the native address of an AOT function, or the address of a CBC method's **function descriptor** — a 16-byte record in an engine-reserved, non-executable region (§9) | ~25 lines + ~80 lines (descriptor region) | the AOT-static-field trick for native function addresses; gives every CBC function a stable address-sized identity usable by E6, with no per-process limit |
-| **E6** | new instruction `CallIndirect reg` (`RegGroup` selector 9): a descriptor address is called exactly like `DIRECT_CALL_2I`, any other address exactly like `DIRECT_CALL_2C`; null raises `NoneValueException` | ~40 lines | every dispatcher, every index-backed function pointer, the dispatcher calling convention and the trampoline budget |
+| **E5** | new instruction `LoadFuncPtr dst, @mref` (`RegSymGroup` selector 13): the native address of an AOT function, or a CBC method's **N2C stub** (`DynamicFunctionHandle::nativePtr`) — a C-callable host-ELF symbol that enters the interpreter (§6, §8) | rewriter + `nativePtr` + `FunctionDescriptors` map | the AOT-static-field trick for native function addresses; every CBC function has a stable, native-callable address usable by E6, with no trampoline-table limit |
+| **E6** | new instruction `CallIndirect reg` (`RegGroup` selector 9): `FunctionDescriptors::Lookup` hit → `DIRECT_CALL_2I`; miss → `DIRECT_CALL_2C`; null raises `NoneValueException` | ~40 lines | every dispatcher, every index-backed function pointer, the dispatcher calling convention and the trampoline budget |
 | **E7** | `engine_i2c_call` (x86-64) sets `al = 8` before every native call (§10) | 1 instruction | the redirection of floating-point variadic native calls to `v*` variants (`printf("%f")` becomes a plain native call) |
 | **E8** | untyped memory in the frame, `lea.frame`, runtime `alloca` / `stacksave` / `stackrestore`, freeing on return and unwind, `ld.fcb` (§11) | frame layout, five `RegGroup` selectors, shadow-stack runtime | the compiler-managed shadow stack, the reserved `IR13`, the startup `mmap`, the landing-pad reload of a stack pointer |
 
-**Explicitly out of scope:** native code calling CBC code (callbacks). E5 deliberately
-returns *non-executable* descriptors for CBC methods, so native code cannot call a CBC
-function pointer at all: such a call faults on the non-executable page. Whether a native
-entry into the interpreter would be safe depends on Cangjie runtime behaviour that has not
-been verified (§8). Nothing in the compiler design relies on it.
+**Native→CBC is in scope** via N2C stubs (`engine_enter_via_n2c`, `engine_load_buffer`).
+A CBC function pointer is the stub address; native code can `call` it. Remaining
+runtime caveats (GC walk across native frames, exception unwind through native,
+async entry) are listed in §8; they did not block shipping the stub.
 
 **Not accepted (yet)** — the corresponding workarounds remain in force:
 
@@ -36,7 +42,7 @@ been verified (§8). Nothing in the compiler design relies on it.
 | implement `LD_U8TO64`, `LD_U16TO64`, `LD_U32TO64`, `LD_S8TO64`, `LD_S16TO64` | use only the supported load kinds | `01` Q7, `02` §3 |
 | `FrameDescProvider` reads `SourceFullName` when only `SourceFile` is set | emit both tags or neither | `01` Q12, `03` §9.2 |
 | literal-table overflow as a release-mode rewrite failure | `CBCLiteralBudget` | `01` Q3, `06` §11 |
-| raise `TRAMPOLINE_COUNT` (1 024), or allocate executable trampoline pages at run time | not needed: E5 returns descriptors, which need no executable memory and have no fixed limit (§9) | — |
+| raise `TRAMPOLINE_COUNT` (1 024), or allocate executable trampoline pages at run time | not needed: E5 returns per-method N2C stubs in the host DSO, which are ordinary ELF text and have no engine trampoline-table limit (§6, §8) | — |
 | second result registers in `i2c`, static initial values, raw-address atomics, `argc/argv` to `main`, frame-zeroing skip, zero-extended 32-bit results, more math ops, jump tables, version checks, throwing stubs | all corresponding workarounds | `04`, `07`, `10` |
 
 ## 1. Compatibility rules for all changes
@@ -248,114 +254,110 @@ disassembly:  ld.fnptr IR3, @5
 ```
 
 `dst` receives an **address** for the method designated by the method reference, resolved
-exactly like `CallDirect` (`ResolverProxy::ResolveCall(DirectCall)`,
-`src/resolution/resolution.cpp:699-759`):
+exactly like `CallDirect` (`ResolverProxy::ResolveCall(DirectCall)`):
 
 | Resolved target | Value | Cost |
 |---|---|---|
-| AOT reference (`AOT` flag, direct-call AOT entry) | the `dlsym`ed native address | none beyond resolution |
-| CBC method with a `StaticFunctionHandle` (an `AOT`-flagged definition) | its native function pointer | none |
-| CBC method (`DynamicFunctionHandle`) | the address of its **function descriptor** (`FunctionDescriptors::Get(fuh)`, §9) | the first request for a method creates its 16-byte descriptor; later requests for the same method return the same address |
+| AOT / compiled (`DirectCall::Compiled`) | `compiled->funcPtr` (`dlsym` / native) | none beyond resolution |
+| CBC method (`DynamicFunctionHandle`) | `fuh->nativePtr` — the method's **N2C stub** | `FunctionDescriptors::Add(nativePtr, fuh)` so E6 can I2I |
 
 The value is computed **while the containing method is rewritten** and baked into the RT
-code as a 64-bit immediate (`MOVI`/`ADDI` from `IRZ` with a literal). It is not a state point.
-Resolution failure is a rewrite failure. Exhaustion of the descriptor region (2^20
-descriptors with the default reservation, §9) is a `FATAL` at rewrite time; it is not a
-limit any C program reaches in practice.
+code as a 64-bit immediate. It is not a state point. Resolution failure is a rewrite
+failure. `nativePtr` is non-null once `engine_load_buffer` has `Acquire`d every exported
+method and stored the stub address from the host DSO's `ExportedInfo` table
+(`include/cbc_engine.h`). Standalone `.cbc` files without that table have no stub;
+`LoadFuncPtr` of a CBC method then sees a null `nativePtr` (the LLVM backend's native
+shared-library path is the supported producer).
 
 Properties the compiler relies on:
 
 * the value is stable for the life of the process and identical for every request for the
-  same method (the descriptor map is keyed by the handle), so it works as a
-  function-pointer identity: equality, ordering, casts to integers, storage in memory;
-* for a CBC method it lies inside the descriptor region, which `CallIndirect` (E6)
-  recognizes with one range check and turns into an ordinary interpreted call;
-* descriptors are 16-byte aligned (even values; the C++ member-function-pointer encoding
-  needs the low bit free);
+  same method (`nativePtr` is stored on the handle; the map is keyed by that address);
+* for a CBC method it **is** executable: it is ordinary host text (the N2C stub). Native
+  code can `call` it; that is the point of 25b (`25-cbc-native-libraries.md`);
+* `CallIndirect` (E6) `Lookup`s the same address: a hit means "this is a CBC method,
+  do I2I and do not nest N2C"; a miss means "this is a real native function, do I2C";
 * for an AOT target it is the real native address, which `CallIndirect` calls natively,
   and which may be passed to native code as an ordinary C function pointer.
 
-What a descriptor is **not**: executable code. The region is mapped `PROT_READ |
-PROT_WRITE`; a native `call` to a descriptor address faults with `SIGSEGV` on the
-non-executable page. This is deliberate: native code calling CBC code is out of scope
-(§8), and the engine therefore never needs executable memory beyond its static
-trampolines, which also keeps E5 usable on systems that forbid writable-then-executable
-mappings.
+Why not the engine's 1 024 direct-call trampolines: they are a process-wide table
+(`TRAMPOLINE_COUNT`), shared with the launcher entry and Cangjie PATCH, and exhausting
+them is `FATAL`. N2C stubs live in the host DSO's `.text` and scale with the number of
+exported methods, with no engine-side cap.
 
-Why not the existing direct-call trampolines (the earlier version of this change): they
-are limited to `TRAMPOLINE_COUNT = 1 024` per process (`src/asm_export.h:15`), shared with
-the entry point and any other loaded `.cbc`, and exhausting them is a `FATAL`
-(`src/runtimesupport/impl/adapters.cpp:52-54`). Keeping C programs under that limit forced
-a second, index-backed function-pointer representation with per-signature dispatchers in
-the compiler. Their only advantage — being callable by native code — is exactly what is
-out of scope.
+Why not a non-executable in-engine descriptor region (the original E5 spec): that
+design made native→CBC a `SIGSEGV` by construction and kept callbacks out of scope.
+The `cbc` branch replaced it. There is no `mmap` of a descriptor region, no
+`FunctionDescriptors::Get`, no 16-byte `Descriptor` record. Do not reintroduce them.
 
 ### 6.2 Implementation
 
-`src/cbc/isa_opcodes.h`:
-
-```cpp
-#define ISA_REG_SYM_GROUP_OPCODES(X) \
-    X(LoadTypeInfoSig) X(LoadTypeInfoGeneric) X(NewObj) X(CallDirect) X(CallVirt) \
-    X(CallInterf) X(Spawn) X(SpawnFuture) X(CallClosure) X(NewClosure) \
-    X(CallClosureGeneric) X(NewObjGeneric) X(NewClosureGeneric) \
-    X(LoadFuncPtr)          /* 13: new */ \
-    X(_END)
-```
+`src/cbc/isa_opcodes.h`: `LoadFuncPtr` is `RegSymGroup` selector 13 (appended after
+`NewClosureGeneric`).
 
 `src/cbc/isa_parser.h`: `virtual void LoadFuncPtr(IReg dst, uint32_t method) = 0;`
 
 `src/cbc/isa_parser.cpp`, `IsaParserImpl::RegSymGroup`:
 `case Cbc::RegSymGroup::LoadFuncPtr: parser.LoadFuncPtr(reg, id); break;`
 
-`src/cbc/isa_rewriter.cpp`:
+`src/cbc/isa_rewriter.cpp` (as on `cbc`):
 
 ```cpp
 void LoadFuncPtr(IReg dst, uint32_t methodId) override
 {
     auto m = resolver.Query(Index<DirectCall>(methodId));
     if (!m.has_value()) {
-        return Fail("cannot resolve method for ld.fnptr");
+        Fail();
+        return;
     }
     uintptr_t address;
     if (auto compiled = std::get_if<DirectCall::Compiled>(&(*m)->data)) {
         address = compiled->funcPtr;
     } else {
         auto fuh = std::get<Interpretation::DynamicFunctionHandle*>((*m)->data);
-        address  = RTSupport::FunctionDescriptors::Get(fuh);   // §9
+        address = reinterpret_cast<uintptr_t>(fuh->nativePtr);
+        // nativePtr non-null once load_buffer Acquired every method first.
+        if (fuh->nativePtr != nullptr)
+            RTSupport::FunctionDescriptors::Add(fuh->nativePtr, fuh);
     }
     emit.MovImm(Format::Width::W64, dst, address);
 }
 ```
 
-`src/cbc/isa_disasm.cpp`, `IsaDisasm`:
+`src/cbc/isa_disasm.cpp`:
 `void LoadFuncPtr(IReg dst, uint32_t m) override { stream.PrintLn("ld.fnptr {}, @{}", dst, m); }`
-(and the resolving variant that prints the method name, like `CallDirect`).
 
-Toolchain sync (optional, keeps the Scala assembler/disassembler able to read files that use
-the instruction): `cbc_compiler/core/cbc-asm` (`NewAsmParser.scala`, `CodeGenerator.scala`)
-and the selector enum in `cbc_compiler/core/assembler/.../isa12/forked/Assembler.scala`.
+`DynamicFunctionHandle` has `void* nativePtr = nullptr` (C++ field, not an asm
+offset). `engine_load_buffer` fills it from `ExportedInfo.nativePtr` and calls
+`FunctionDescriptors::Add` before rewriting callers.
 
-### 6.3 Thread safety and publication
+### 6.3 The descriptor map
 
-`FunctionDescriptors::Get` takes its own mutex, writes the handle into the next free
-descriptor, and then publishes the new descriptor count with a release store (§9). The
-handle is fully constructed before it is published (`FunctionHandleManager::AcquireTagged`
-issues a `seq_cst` fence). Readers in E6 never take the lock: they range-check the address
-and compare its index with the count loaded with acquire semantics, so they can only
-dereference descriptors whose handle store happened before. A descriptor address reaches
-another thread only through RT code that was itself published after `Get` returned.
+`src/interpreter/function_descriptors.{h,cpp}`:
+
+```cpp
+void Add(void* nativePtr, DynamicFunctionHandle* fuh);   // idempotent for the same pair
+DynamicFunctionHandle* Lookup(uintptr_t address);         // nullptr on miss
+```
+
+A mutex-protected `unordered_map<uintptr_t, DynamicFunctionHandle*>`. `Add` is
+called from `engine_load_buffer` (all exports) and again from `LoadFuncPtr` (belt
+and braces). `Lookup` is the E6 fast path. Re-`Add` of the same pair is a no-op;
+a different FuH for the same pointer is `ASSERTION`.
+
+This is **not** lock-free. Indirect calls take the mutex. That is the current
+`cbc` code; a lock-free map is an optimization, not a spec requirement.
 
 ### 6.4 Tests
 
-* Rewrite a method containing `ld.fnptr IR1, @m` (CBC target) twice in different methods:
-  same value; value inside the descriptor region and 16-byte aligned.
-* 5 000 distinct methods with `ld.fnptr`: 5 000 distinct values, all accepted by E6 (the
-  old 1 024 limit does not exist).
-* AOT target (`puts`): value equals `dlsym(RTLD_DEFAULT, "puts")`.
-* `ld.fnptr` of an unresolvable method → rewrite failure, not a bogus value.
-* Death test: a native function (in the test binary) that calls a descriptor address →
-  `SIGSEGV` (documents that descriptors are not executable).
+* `ld.fnptr` of a CBC method whose stub was bound by `engine_load_buffer`: value
+  equals `ExportedInfo.nativePtr`; `Lookup` returns that method's FuH.
+* Two `ld.fnptr` of the same method: same value.
+* 5 000 distinct exported methods: 5 000 distinct stub addresses, all accepted
+  by E6 (the old 1 024 trampoline limit does not apply).
+* AOT target (`puts`): value equals `dlsym`.
+* Unresolvable method → rewrite failure.
+* Native `call` of an N2C stub enters the interpreter (not `SIGSEGV`). See §8.
 
 ## 7. E6 — `CallIndirect reg`
 
@@ -377,13 +379,14 @@ Run-time behaviour (`LABEL(CALL_REG)`):
 1. `target = IR[reg]`.
 2. `target == 0` → raise `NoneValueException` (implicit exception), so a null function
    pointer call is catchable instead of a segmentation fault.
-3. `target` is a function descriptor (§9: inside the region, 16-byte aligned, index below
-   the published count) → **fast path**: call the descriptor's `DynamicFunctionHandle`
-   through its `i2call` adapter (`engine_i2i_call`), exactly as `DIRECT_CALL_2I` does. No native code runs; the call is an ordinary CBC→CBC call
-   (tail register set, non-volatile registers saved by the callee, exceptions unwind
-   normally, two-register results in `IR1`/`IR2` reach the caller).
+3. `FunctionDescriptors::Lookup(target)` hits → **fast path**: I2I through that
+   `DynamicFunctionHandle`, exactly as `DIRECT_CALL_2I` does. No native code runs;
+   the call does **not** nest N2C (interpreter → I2I, not interpreter → I2C → N2C → C2I).
+   Tail register set, non-volatile registers saved by the callee, exceptions unwind
+   normally, results in `IR1`/`FR0`.
 4. Otherwise → native call through `GenericI2CCallInstance` (`engine_i2c_call`), exactly as
-   `DIRECT_CALL_2C` does.
+   `DIRECT_CALL_2C` does. This is how C function pointers and AOT addresses are called.
+   On x86-64, E7 sets `al` first.
 
 `reg` may be any integer register; its value is read before argument registers are loaded,
 so it may even be an argument register (the compiler avoids that anyway).
@@ -428,7 +431,7 @@ void Emitter::CallReg(IReg target)
 `src/cbc/isa_rt.h` (`CBC_RT_OPCODES`, next to `DIRECT_CALL_2C`):
 `X(CALL_REG, B2xr, "call.reg $1ir")`
 
-The descriptor test is `FunctionDescriptors::Lookup` (§9).
+The stub test is `FunctionDescriptors::Lookup` (§6.3).
 
 `src/interpreter/interpretation_loop.cpp`:
 
@@ -450,7 +453,8 @@ LABEL(CALL_REG) {
 
 (`DynamicFunctionHandle` has `base` (`FunctionHandle`, holding `i2call`) as its first
 member, which is what `DIRECT_CALL_2I` relies on when it casts the literal to
-`FunctionHandle*`.)
+`FunctionHandle*`. On `origin/master` this `i2call` pointer is gone — the trampoline
+rewrite returns `ThunkOp::I2ICall` instead. The rebase must retarget this `LABEL`.)
 
 `src/cbc/isa_disasm.cpp`: `void CallIndirect(IReg r) override { stream.PrintLn("call.indirect {}", r); }`
 
@@ -464,152 +468,78 @@ same two adapters it already handles for `DIRECT_CALL_2I`/`2C`).
 ### 7.3 Exceptions
 
 * Fast path: identical to a `CallDirect` to a CBC method.
-* Native path: identical to a `CallDirect` to an AOT method. A native target never raises a
-  CBC exception (it cannot call back, §8).
+* Native path: identical to a `CallDirect` to an AOT method. A native target *can* call
+  back into CBC through an N2C stub (§8); that is a nested interpreter activation, not
+  a CBC exception raised by the native code itself.
 * Null target: the implicit exception is raised at the `call.indirect` instruction, inside
   the caller's exception region if the call is an `invoke`.
 
 ### 7.4 Tests
 
-* `call.indirect` to `ld.fnptr` of a CBC method: fast path taken (trace log shows `call.2i`
-  semantics), arguments in 6 registers + 3 stack slots, two-register result.
-* `call.indirect` to a value inside the descriptor region but beyond the published count,
-  or misaligned: not treated as a descriptor (native path; the test uses a value whose
-  native call is caught by a `SIGSEGV` death test).
+* `call.indirect` to `ld.fnptr` of a CBC method: `Lookup` hits, I2I, no N2C frame on the
+  stack. Arguments in ABI registers + stack slots, result in `IR1`/`FR0`.
+* `call.indirect` to an address that was never `Add`ed: native I2C path.
 * `call.indirect` to `ld.fnptr` of `puts`: native path.
 * `call.indirect` to an address obtained from `dlsym` at run time: native path.
 * Null: catchable `NoneValueException`.
 * Exception thrown by a CBC callee reached through the fast path, caught by the caller's
   region.
+* Native caller of an N2C stub (`engine_load_buffer` / host DSO): enters the interpreter
+  via `engine_enter_via_n2c`.
 
-## 8. Out of scope: native code calling CBC code
+## 8. Native code calling CBC code (N2C)
 
-The engine has a mechanism for native code to enter the interpreter (direct-call
-trampolines → `engine_c2i_call`, used by the launcher for `main`), but this plan does
-**not** use it, and E5 deliberately hands out non-executable descriptors instead of
-trampoline addresses, so a CBC function pointer cannot reach that path. The reason is that
-the safety of native→CBC calls depends on behaviour that has not been verified:
+This **is** in scope on the `cbc` branch. Every exported CBC method has a host-ELF
+symbol whose body is an N2C stub. The stub's address is `FuH.nativePtr`, the value
+`ld.fnptr` returns, and the key `FunctionDescriptors` uses for I2I.
 
-* the fiber stack does not relocate (`01-cbc-platform-facts.md` §7), so a native frame's
-  pointers into itself are not the problem they were under stack relocation; the other
-  three items below still are;
-* whether the runtime's GC stack walk can cross native frames between two interpreter
-  activations;
-* whether an exception leaving the inner activation can unwind through native frames back
-  into the outer interpreter frame;
-* asynchronous entry (signal handlers, new native threads, process-exit callbacks), which
-  would run without a valid Cangjie thread register or would clobber the interrupted
-  code's `Ectype` registers.
+Entry path (`src/arch_os/x86_64_linux/trampolines.S`, same idea on aarch64):
 
-Consequences:
-
-* Callback-taking libc functions (`qsort`, `qsort_r`, `bsearch`, `lfind`, `lsearch`, the
-  `tsearch` family, `ftw`, `nftw`, `pthread_create`, `pthread_once`, `pthread_atfork`,
-  `pthread_key_*`, `call_once`, `thrd_create`, `fopencookie`, `dl_iterate_phdr`, …) are
-  **unsupported** and rejected at link time; they are not re-implemented in CBC
-  (`10-linker-and-runtime.md` §5.5). The exit-handler family (`atexit`, `__cxa_atexit`, …)
-  is defined in CBC by `crt-cbc`, because its handlers are called by CBC code. Signal
-  handlers are refused at run time by crt guards that accept only `SIG_DFL`/`SIG_IGN`
-  (§5.2 there).
-* Passing a CBC function to a function-pointer parameter of a native function is a
-  link-time error when provable, and a warning otherwise (`10-linker-and-runtime.md` §5.6).
-  If such a value reaches native code anyway and is called, the call faults on the
-  non-executable descriptor page — a crash at the faulty call, not silent corruption.
-
-If the runtime team later confirms the conditions above and callbacks are wanted, a
-separate change would have to give descriptors an executable entry (for example a static
-or dynamically allocated trampoline per descriptor, created on demand when a pointer is
-passed to native code). That is a separate decision with its own test plan.
-
-## 9. The function descriptor region
-
-New files `src/runtimesupport/impl/function_descriptors.{h,cpp}`:
-
-```cpp
-namespace RTSupport::FunctionDescriptors {
-
-struct Descriptor {                                   // 16 bytes, 16-byte aligned
-    Interpretation::DynamicFunctionHandle* fuh;
-    uint64_t reserved;                                // 0; room for a future executable entry
-};
-
-constexpr size_t kRegionBytes = size_t(16) << 20;     // 16 MiB = 1 048 576 descriptors
-constexpr size_t kCommitStep  = size_t(64) << 10;     // commit 4 096 descriptors at a time
-
-uintptr_t Get(Interpretation::DynamicFunctionHandle* fuh);              // E5
-Interpretation::DynamicFunctionHandle* Lookup(uintptr_t address);       // E6, lock-free
-
-} // namespace RTSupport::FunctionDescriptors
+```
+engine_enter_via_n2c(fuh):
+  push a frame matching InitCJLibraryStub (funcAddr = engine_n2c_c2i_body, cpStackSize = 0)
+  call [engine_n2c_stub]          // CJ_MCC_N2CStub; preserves arg regs
+  // body:
+  engine_n2c_c2i_body:
+    mov rax, rdi                  // fuh
+    jmp engine_all_regs_c2i_call
 ```
 
-```cpp
-// function_descriptors.cpp
-static std::atomic<uintptr_t> g_base{0};               // 0 until the region is reserved
-static std::atomic<size_t>    g_count{0};              // published descriptors
-static size_t                 g_committed = 0;         // bytes committed (under g_mutex)
-static std::mutex             g_mutex;
-static std::unordered_map<Interpretation::DynamicFunctionHandle*, uintptr_t> g_byHandle;
+`engine_n2c_stub` is filled from the runtime (`rt_syms.cpp`) with `CJ_MCC_N2CStub`.
+`engine_load_buffer` (`entrypoint.cpp`) binds each `ExportedInfo { nativePtr, offset }`
+to a `DynamicFunctionHandle`, stores `nativePtr` on the handle, `Add`s the map, then
+calls `infos[0].nativePtr` (`__cbc_lib_start`).
 
-uintptr_t Get(Interpretation::DynamicFunctionHandle* fuh)
-{
-    std::lock_guard guard(g_mutex);
-    if (auto it = g_byHandle.find(fuh); it != g_byHandle.end()) return it->second;
-    uintptr_t base = g_base.load(std::memory_order_relaxed);
-    if (base == 0) {
-        void* p = mmap(nullptr, kRegionBytes, PROT_NONE,
-                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-        if (p == MAP_FAILED) FATAL("cannot reserve the CBC function descriptor region");
-        base = reinterpret_cast<uintptr_t>(p);         // page-aligned, hence 16-aligned
-        g_base.store(base, std::memory_order_release);
-    }
-    size_t index = g_count.load(std::memory_order_relaxed);
-    size_t end   = (index + 1) * sizeof(Descriptor);
-    if (end > kRegionBytes) FATAL("too many CBC function descriptors");
-    if (end > g_committed) {
-        if (mprotect(reinterpret_cast<void*>(base + g_committed), kCommitStep,
-                     PROT_READ | PROT_WRITE) != 0)
-            FATAL("cannot commit the CBC function descriptor region");
-        g_committed += kCommitStep;
-    }
-    auto* d = reinterpret_cast<Descriptor*>(base) + index;
-    d->fuh = fuh;
-    d->reserved = 0;
-    g_count.store(index + 1, std::memory_order_release); // publish
-    uintptr_t address = reinterpret_cast<uintptr_t>(d);
-    g_byHandle.emplace(fuh, address);
-    return address;
-}
+Supported producer: LLVM `--cbc -shared` (25b). The host DSO contains the stubs and
+the CBC payload; the launcher can `dlopen` it.
 
-Interpretation::DynamicFunctionHandle* Lookup(uintptr_t address)
-{
-    uintptr_t base = g_base.load(std::memory_order_acquire);
-    if (base == 0) return nullptr;
-    uintptr_t delta = address - base;                  // wraps for address < base
-    if (delta >= kRegionBytes || (delta & 15) != 0) return nullptr;
-    if (delta / sizeof(Descriptor) >= g_count.load(std::memory_order_acquire)) return nullptr;
-    return reinterpret_cast<const Descriptor*>(address)->fuh;
-}
-```
+Caveats that are **not** fully verified (they did not block shipping the stub):
 
-Design points:
+* GC stack walk across a native frame sitting between two interpreter activations;
+* a CBC exception unwinding through that native frame back to an outer interpreter
+  frame;
+* asynchronous entry (signal handlers, brand-new native threads, process-exit
+  callbacks) without a valid Cangjie thread register / `Ectype`.
 
-* **Address space only.** The 16 MiB reservation costs no memory; committed pages cost
-  4 KiB per 256 descriptors. A large C++ program with 50 000 address-taken functions (every
-  surviving virtual function) uses about 800 KiB.
-* **No executable memory.** Nothing in the region is ever executable, so the change works
-  under W^X policies (SELinux `deny_execmem`, systemd `MemoryDenyWriteExecute=yes`) and on
-  JIT-restricted platforms.
-* **Identity.** One descriptor per handle for the life of the process; handles are never
-  freed (the same assumption the static trampoline table already makes).
-* **Lookup cost.** One acquire load of the base, a subtraction, two compares, one acquire
-  load of the count and one load of the handle — no lock, no hash lookup on the call path.
-* **Unaffected users of trampolines.** The static direct-call and dynamic-call trampolines
-  keep serving the launcher's entry point, virtual calls of Cangjie code and `PATCH`.
-  `GetDirectCallTrampoline` is no longer reached from E5.
-* **Tests:** concurrent `Get` from several threads for the same and for different handles
-  (same address for the same handle, no duplicates); `Lookup` of the region base minus 16,
-  of the last committed descriptor plus 16, and of misaligned addresses returns null;
-  growth across a commit step.
+`qsort`-style libc callbacks are therefore still a product limitation until those
+are proven; the engine mechanism to enter CBC from native is no longer the missing
+piece. Passing a CBC pointer to native code is no longer a guaranteed `SIGSEGV`.
+
+x86-64 Linux is the supported ClangCBC target. aarch64 Linux trampolines exist and
+will be brought up next. Apple trampolines must keep compiling and must not regress
+Cangjie; they are not a ClangCBC target.
+
+## 9. `FunctionDescriptors` (current)
+
+See §6.3. There is **no** descriptor region. The files are
+`src/interpreter/function_descriptors.{h,cpp}` (not under `runtimesupport/impl`).
+
+* **Identity.** One `nativePtr` per handle; handles are not freed.
+* **Lookup cost.** Hash map under a mutex on every `call.indirect`. Fine for now.
+* **Unaffected users of trampolines.** The static 1 024-entry direct/dyn trampoline
+  tables still serve Cangjie PATCH and the launcher entry. E5 does not consume them.
+* **Tests:** `test/function_descriptors_test.cpp`, `test/native_shared_library_test.cpp`
+  (`CallIndirectIsI2I`), `test/engine_load_buffer_test.cpp`.
 
 ## 10. E7 — `al` before native calls (x86-64)
 
@@ -819,7 +749,7 @@ stack pointer; the sjlj pad does `stackrestore` the token saved at `setjmp`
 | `01-cbc-platform-facts.md` | §3.4 (E2), §4 (E1), §5 (new calls), §10 (callbacks still unsupported), §12 Q1/Q4/Q11/Q17 |
 | `02-isa-encoding.md` | selector tables, §4.9 encodings, §6/§8 costs, §9 |
 | `03-cbc-file-format.md` | §4.3 (no padding), §5 (refs for `ld.fnptr`), §12/§14 limits |
-| `04-architecture.md` | §1, §3, §7 rewritten (one representation: descriptors), §8, §9 (no dispatcher convention), §10.2 (E7), §13, §16, §17 |
+| `04-architecture.md` | §1, §3, §7 rewritten (one representation: N2C stub addresses), §8, §9 (no dispatcher convention), §10.2 (E7), §13, §16, §17 |
 | `05-llvm-core-changes.md` | no `CBC_Dispatch` calling convention; `ExpandVariadics` expands indirect variadic calls (`ignoreFunction(nullptr)` is false) |
 | `06-backend.md` | new MIs, `LowerCall` for indirect calls, frame limits, intrinsics, checks; no dispatcher lowering |
 | `07-ir-passes.md` | §1, §2 (engine probe), §3 (relocation kinds), §4 (function address preparation), §5 removed (no indirect-call rewriting), §6 (no `v*` redirection of calls), §8 |

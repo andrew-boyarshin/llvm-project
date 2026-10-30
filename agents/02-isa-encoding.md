@@ -1,10 +1,22 @@
 # 02 — CBC Instruction Encoding for the LLVM Backend
 
+> **Warning (2026-10-30):** This file was written against `cbc-engine-initial-stage`
+> at fork `4e4a8ed` / branch `cbc`. `origin/master` has since **inserted** top-level
+> opcodes (`CheckedConvert`, `NewArrGeneric`, `BoxGeneric`, `BoxTGeneric`,
+> `ConstIndexGeneric`) and **moved** `CallDirect` / `CallVirt` / `CallInterf` /
+> `CallClosure*` out of `RegSymGroup` onto `ISA_OPCODES` with a ULEB `Location`
+> argument list. **Hex opcode numbers after `Convert` (0x39) are wrong on master**,
+> and the Call* encodings in §4.8 are the fork form. Treat the tables here as the
+> ClangCBC-era ISA. Re-read `src/cbc/isa_opcodes.h` and `isa_parser.cpp` on the
+> engine revision you are targeting. Stale tables here are **not** a blocker for
+> rebasing `cbc` onto master — the LLVM backend will be updated against the
+> rebased engine headers.
+
 Ground truth: `src/cbc/isa_opcodes.h` (opcode numbering), `src/cbc/isa_parser.cpp`
 (operand order and widths), `src/cbc/isa.h` (enumerations), `src/cbc/isa_rewriter.cpp`
 (what each instruction becomes), `src/interpreter/*` (runtime semantics). All paths are in
-`cbc-engine-initial-stage`. Every encoding in §4–§6 was cross-checked against the parser;
-the samples in §10 were decoded from `sandbox/default.cbc`.
+`cbc-engine-initial-stage`. Every encoding in §4–§6 was cross-checked against the parser
+**on the fork / `cbc` branch**; the samples in §10 were decoded from `sandbox/default.cbc`.
 
 ## 1. Encoding primitives
 
