@@ -1,5 +1,6 @@
 #include "CBCFileWriter.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/raw_ostream.h"
@@ -241,6 +242,16 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
     Pool.append(Bytes.begin(), Bytes.end());
     return Off;
   };
+  // Reuse one pool object for identical string payloads.
+  StringMap<uint32_t> InternedStrings;
+  auto addString = [&](StringRef S) -> uint32_t {
+    auto It = InternedStrings.find(S);
+    if (It != InternedStrings.end())
+      return It->second;
+    uint32_t Off = add(cbcString(S));
+    InternedStrings.try_emplace(S, Off);
+    return Off;
+  };
 
   std::vector<CBCNativeCallee> Callees(Natives.begin(), Natives.end());
   auto findOrAdd = [&](StringRef Name, bool Native, StringRef Params,
@@ -269,13 +280,13 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
   if (NeedRelocs)
     ApplyIdx = findOrAdd("__cbc_apply_image_relocs", false, "iiii", false);
 
-  uint32_t SEntry = add(cbcString(EntryName));
+  uint32_t SEntry = addString(EntryName);
   uint32_t SAotDeps = UINT32_MAX;
   if (!AotDeps.empty())
-    SAotDeps = add(cbcString(AotDeps));
+    SAotDeps = addString(AotDeps);
   SmallVector<uint32_t, 8> NameOffs;
   for (const CBCCompiledMethod &M : Methods)
-    NameOffs.push_back(add(cbcString(M.Name)));
+    NameOffs.push_back(addString(M.Name));
 
   // Term 20: FUNCTIONAL(0 params, I64). Term 21: REF entry.
   uint32_t TSig = add(std::string("\x0C\x00\x0C", 3));
@@ -290,7 +301,7 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
     AnyNative |= C.Native;
   uint32_t NativeTermId = 0;
   if (AnyNative) {
-    uint32_t SNative = add(cbcString("cbc.native"));
+    uint32_t SNative = addString("cbc.native");
     TermOffs.push_back(add(std::string("\x02", 1) + ulebStr(SNative)));
     NativeTermId = 20 + TermOffs.size() - 1;
   }
@@ -298,8 +309,8 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
   uint32_t DataRefId = 0, FstId = 0, SImageName = 0, SData = 0, FieldDefOff = 0;
   if (Image.SizeBytes) {
     uint32_t NU64 = std::max<uint32_t>(1, (Image.SizeBytes + 7) / 8);
-    SData = add(cbcString("$cbc.ex:Data"));
-    SImageName = add(cbcString("image"));
+    SData = addString("$cbc.ex:Data");
+    SImageName = addString("image");
     TermOffs.push_back(add(std::string("\x01", 1) + ulebStr(SData)));
     DataRefId = 20 + TermOffs.size() - 1;
     std::string Va;
@@ -330,7 +341,7 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
 
   SmallVector<uint32_t, 8> MRefs, SigIds, NameStr;
   for (const CBCNativeCallee &C : Callees) {
-    NameStr.push_back(add(cbcString(C.Name)));
+    NameStr.push_back(addString(C.Name));
     uint32_t Sid = sigTerm(C);
     // Fix: sigTerm returns 19+size after push, which is 20+index. Good.
     SigIds.push_back(Sid);
@@ -361,9 +372,9 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
   }
   // Blobs go in before method code so their pool offsets do not depend on it.
   if (NeedBlob)
-    BlobOff = add(cbcString(Image.Blob));
+    BlobOff = addString(Image.Blob);
   if (NeedRelocs)
-    RelocOff = add(cbcString(Image.Relocs));
+    RelocOff = addString(Image.Relocs);
 
   SmallVector<uint32_t, 8> Codes, MDefs, MethodSigs;
   for (const CBCCompiledMethod &M : Methods) {
@@ -476,9 +487,9 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
                 {"$cbc:A16", 7},
                 {"$cbc:A32", 9},
                 {"$cbc:A64", 12}};
-  uint32_t SV = add(cbcString("v"));
+  uint32_t SV = addString("v");
   for (const auto &AT : ATypes) {
-    uint32_t SName = add(cbcString(AT.Name));
+    uint32_t SName = addString(AT.Name);
     TermOffs.push_back(add(std::string("\x0D", 1) + ulebStr(SName))); // REC
     uint32_t RecId = 20 + TermOffs.size() - 1;
 
