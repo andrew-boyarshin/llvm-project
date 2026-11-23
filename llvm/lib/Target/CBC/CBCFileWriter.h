@@ -52,12 +52,19 @@ struct CBCExport {
   unsigned MaxCalleeStackArgs = 0;
 };
 
+/// A method reference of ABI kind C (every ClangCBC method is C-ABI). `Native`
+/// ones are declarations resolved by the dynamic loader: they become FOREIGN
+/// method definitions with a linkage name.
 struct CBCNativeCallee {
   std::string Name;
   bool Native = true;
-  /// Argument classes in call order: 'i' integer register, 'f' float register.
+  /// Argument classes in call order: 'i' integer register, 'f' float register,
+  /// '.' marks the start of the variadic arguments (the engine's variadic label).
   std::string Params;
   bool RetFloat = false;
+  /// Method reference that only carries a signature (the target of a
+  /// `call.indirect`). It has no definition and no name.
+  bool Synthetic = false;
 };
 
 struct CBCImageInfo {

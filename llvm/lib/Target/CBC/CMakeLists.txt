@@ -16,6 +16,7 @@ add_llvm_target(CBCCodeGen
   CBCISelDAGToDAG.cpp
   CBCISelLowering.cpp
   CBCInstrInfo.cpp
+  CBCLowerByVal.cpp
   CBCLowerEH.cpp
   CBCLowerGlobals.cpp
   CBCLowerSjLj.cpp

@@ -13,6 +13,11 @@ every exported CBC method has a host-ELF callable entry that enters the
 interpreter, and `ld.fnptr` of a CBC method returns that stub address.
 §6, §8 and §9 below describe the N2C design, not the discarded descriptor region.
 
+> **Rebased onto engine master (2026-11-23).** The `cbc` branch was squashed and rebased onto
+> `origin/master` (`b3fe6bbb`). Calls, opcode numbers and several image fields changed, so
+> §1 (no renumbering), §7 (E6) and §10 (E7) below describe the fork-era design. The
+> current design is in **§13**; read it first.
+
 Paths are relative to `cbc-engine-initial-stage/` unless stated otherwise. Line numbers
 refer to the `cbc` branch unless noted.
 
@@ -46,6 +51,10 @@ async entry) are listed in §8; they did not block shipping the stub.
 | second result registers in `i2c`, static initial values, raw-address atomics, `argc/argv` to `main`, frame-zeroing skip, zero-extended 32-bit results, more math ops, jump tables, version checks, throwing stubs | all corresponding workarounds | `04`, `07`, `10` |
 
 ## 1. Compatibility rules for all changes
+
+> **Superseded for opcode numbers (see §13).** Master inserted opcodes in the middle of the
+> top-level table; every opcode after `Convert` changed value and `RegSymGroup` / `RegGroup`
+> are now `0x46` / `0x47`. Only the *selector* values quoted below are still right.
 
 * **No renumbering.** The top-level opcode table (`ISA_OPCODES`) is unchanged. E5, E6 and
   E8 use free *selector* values of the two group opcodes (`RegSymGroup` `0x44`,
@@ -361,6 +370,10 @@ This is **not** lock-free. Indirect calls take the mutex. That is the current
 
 ## 7. E6 — `CallIndirect reg`
 
+> **Superseded (see §13).** `call.indirect` is now a top-level opcode with a synthetic method
+> reference and an explicit argument-location list, not `RegGroup` selector 9 (selector 9
+> is `FRet16` on master). The Lookup hit / miss split survives; the miss path is now I2N.
+
 ### 7.1 Encoding and semantics
 
 ```
@@ -542,6 +555,9 @@ See §6.3. There is **no** descriptor region. The files are
   (`CallIndirectIsI2I`), `test/engine_load_buffer_test.cpp`.
 
 ## 10. E7 — `al` before native calls (x86-64)
+
+> **Superseded (see §13).** Master's I2N path (`call.2n`, `engine_c_abi_adapter`) sets `al`
+> itself from the packed vector-register count. Do not port the `mov eax, \fregs_count` hunk.
 
 ### 10.1 Problem
 
@@ -760,3 +776,108 @@ stack pointer; the sjlj pad does `stackrestore` the token saved at `setjmp`
 
 E8, specified above, is already written into those documents: `01` §4 and §7, `02` §4.8,
 `03` §9.1, `04` §5, `06` §6, `07` §2, `08` §1 and §8, `10` §5.3 and §6.1, `11` R2.
+
+## 13. Rebased design (engine master `b3fe6bbb`, 2026-11-23)
+
+This section is the current specification. The engine side is
+`cbc-engine/agents/rebase_onto_master.md` (§14 decision A1 + B7 + C1); this is the compiler
+side. Everything below is implemented in `llvm/lib/Target/CBC`.
+
+### 13.1 Opcode numbers are generated, never hard-coded
+
+`MCTargetDesc/CBCOpcodes.h` lists every top-level opcode, `RegSymGroup` selector and
+`RegGroup` selector. It is **generated from `cbc-engine/src/cbc/isa_opcodes.h`**; regenerate
+it whenever that header changes (master has been appending and inserting opcodes every few
+weeks; `CallIndirect` is currently `0xB4`). All encoders (`CBCEncoding.cpp`, `CBCAsmPrinter.cpp`,
+`CBCFileWriter.cpp`) use its names.
+
+Instruction operand formats that changed with the renumbering and are followed here:
+`load.untyped` / `store.untyped`, `load.stack.rec` (`LoadStackRec`) and `init.string` carry
+their slot as a **ULEB**, no longer a `u16`.
+
+### 13.2 Calls
+
+Every ClangCBC method definition and reference has ABI kind `C` (`MethodAbiKind::C`, value 7;
+method-ref flags byte `7 << 3`, method-def flags `0x7000`). The engine stages the arguments
+of every such call by the host C rules (`StageForeignCallArgs`); the compiler no longer needs
+to pre-colour them, but it still does (identity locations).
+
+```
+call.direct    uleb methodId, uleb(loc+1)..., 0
+call.indirect  [target:4][0:4], uleb methodId, uleb(loc+1)..., 0
+```
+
+* `loc` is the engine `Location` of the *source* of each argument in signature order:
+  integer register `IRn` = `n`, float register `FRn` = `14 + n`, untyped slot `s` = `30 + s`
+  (`CBCCallInfo.h`). `LowerCall` records the lowered signature and the locations as
+  immediates on `CALL` / `CALL_INDIRECT`; the AsmPrinter encodes them. Stack arguments are
+  stored to untyped slots as before and listed as `SLOT` sources.
+* **Direct call to a CBC function:** an ordinary method reference (flags `7<<3`) resolved by
+  name and signature against the definition.
+* **Direct call to a native function:** the module's declaration becomes a **FOREIGN method
+  definition** of the entry type (flags `PUBLIC|FOREIGN|AOT|abiKind C` = `0x7111`, tag 4
+  linkage name, no code). The engine resolves the symbol in the foreign libraries (libc,
+  the host executable, the file's libraries) and emits `call.2n`, which sets `al`. There is no
+  AOT reference and no AOT table entry any more.
+* **Variadic native callee:** the signature term lists the fixed parameters, then the
+  predefined *variadic label* term (id 20), then the actual variadic arguments of that call
+  site. The definition lists the fixed parameters and the label.
+* **Indirect call:** one *synthetic* method reference of kind `C` per lowered function type
+  (empty name; it only carries the signature). The target register must not be written by
+  argument staging; with identity locations it is not.
+* `ld.fnptr` is unchanged in meaning: the real address of a native function, or the N2C stub
+  of a CBC method. Only `C`-kind methods are registered for the interpreter fast path.
+* At run time `CALL_REG` does `FunctionDescriptors::Lookup`: hit → I2I (no native frame),
+  miss → I2N (real C code, N2C stubs of Cangjie methods). Null target raises
+  `NoneValueException`.
+
+### 13.3 What the backend rejects
+
+The engine cannot see `byval` aggregates or `i128` in a lowered signature (they look like
+`I64` words), so `LowerCall` and `LowerFormalArguments` fail the compilation
+(`report_fatal_error` without a crash dump; a `DiagnosticInfoUnsupported` is only printed under
+LTO and still writes a binary) for **`byval` parameters** and **parameters split by type
+legalization (`__int128`)**.
+
+**`byval` between CBC functions is supported by an IR pass, not by the engine.**
+`CBCLowerByVal` (first pass of `addIRPasses`) rewrites every function that is defined in the
+program, has `byval` parameters and is only called directly: the parameter becomes a plain
+`noalias nonnull dereferenceable align` pointer, and each call site memcpy's the aggregate into
+a fresh entry-block alloca and passes its address. The callee keeps a private copy, as `byval`
+promises, and nothing about the image or the engine changes. It leaves alone, so they are still
+rejected: functions whose address is taken (vtables, callbacks, aliases), variadic functions,
+`inalloca` / `preallocated` / `musttail`, default-visibility functions of a native shared
+library (`cbc-wrap`; native code may call them by name), and declarations (native callees keep
+the C ABI). Measured on the CBC suite: 22 of 1617 torture programs and libc++'s `std::vector` / `std::queue`
+needed `byval`; with the pass only 4 torture programs (variadic or address-taken functions) are
+still rejected. A C-ABI-exact `byval` would need a record term in the signature, a C-kind
+`BuildAbiInfo` that counts stack-resident aggregates, and a stack-forced classification in
+`StageForeignStructArg`; it is not implemented. Returns are unaffected: `i128` and two-register
+aggregate returns work (the engine's C2I now copies `rdx` / `xmm1` back). On x86-64 clang
+also passes a 9–16-byte struct `byval` once its registers run out, so the rejection is wider
+than "structs over 16 bytes".
+
+### 13.4 Image format changes followed by `CBCFileWriter`
+
+* Predefined terms are ids 0–20 (20 = variadic label); pool term `i` has id `21 + i`.
+* Method-ref flags: `0x1` SRET, `0x2` HAS_OUTER_TI, `0x4` HAS_FTVARS, `0x38` abiKind, `0x40` AOT.
+* Method-def flags: `0x4` STATIC is gone; `0x10` FOREIGN, `0x100` AOT, `0x7000` abiKind.
+* Code blob: `... mayHaveNativeCalls, uleb untypedMemSize, u8 usesAlloca, uleb codeSize,
+  uleb literals, code, uleb sourceCodeInfoSize (0), exception table, liveness, stack pointers`.
+* Header: slot 52 is the file's *foreign libraries*; the native library names of
+  `cbc.aotDeps` are written there, and the AOT-dependencies slot is `-1`.
+
+### 13.5 Known limits
+
+* Natives are resolved in the foreign libraries only; there is no Cangjie AOT dependency.
+* Signature terms use `I64` / `F64` for every integer / float parameter. Darwin arm64 stack
+  packing (engine residue R6) needs exact narrow builtins; add them with the Apple port.
+* A function whose address is taken (N2C stub) must fit the host register file (lld).
+* A return that does not fit the result registers adds a hidden first `sret` pointer to the
+  signature (call and definition); `ld.fnptr` of such a function is not handled.
+* 32-bit engine operations leave the upper half of the register unspecified, so any 64-bit
+  test of a 32-bit value must be preceded by an extension; `SELECT_FPR_I` now compares at the
+  operand width.
+* `cbc-intrinsics.cbc` is written by `cbc_compiler`'s encoder, which does not yet write the
+  `untypedMemSize` / `usesAlloca` fields, so the engine cannot load it. Until the Scala
+  encoder is updated, no image runs on the rebased engine unmodified (see the engine plan, §18).

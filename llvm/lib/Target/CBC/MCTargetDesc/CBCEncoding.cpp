@@ -1,9 +1,11 @@
 #include "CBCEncoding.h"
+#include "CBCOpcodes.h"
 #include "CBCMCTargetDesc.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LEB128.h"
 
 using namespace llvm;
+using namespace llvm::CBCISA;
 
 unsigned llvm::cbcEncodeReg(MCRegister Reg) {
   switch (Reg.id()) {
@@ -41,6 +43,12 @@ unsigned llvm::cbcEncodeReg(MCRegister Reg) {
   default:
     report_fatal_error("CBC encoder: unsupported register");
   }
+}
+
+static void appendULEB(SmallVectorImpl<char> &CB, uint64_t V) {
+  uint8_t Buf[16];
+  unsigned Len = encodeULEB128(V, Buf);
+  CB.append(Buf, Buf + Len);
 }
 
 static void appendSLEB(SmallVectorImpl<char> &CB, int64_t V) {
@@ -84,7 +92,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
   case CBC::MOV64rr: {
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned S = encReg(MI.getOperand(1).getReg());
-    CB.push_back(0x15);
+    CB.push_back(Mov64);
     CB.push_back(static_cast<char>((D << 4) | (S & 0xF)));
     break;
   }
@@ -92,23 +100,23 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
     unsigned D = encReg(MI.getOperand(0).getReg());
     int64_t Imm = MI.getOperand(1).getImm();
     unsigned Lo = static_cast<unsigned>(Imm) & 0xF;
-    CB.push_back(0x17);
+    CB.push_back(Mov64i);
     CB.push_back(static_cast<char>((D << 4) | Lo));
     appendSLEB(CB, Imm >> 4);
     break;
   }
   case CBC::RET:
-    CB.push_back(0x45);
-    CB.push_back(0x11);
+    CB.push_back(RegGroup);
+    CB.push_back(static_cast<char>((RegRet64 << 4) | 1)); // IR1
     break;
   case CBC::FRET:
-    CB.push_back(0x45);
-    CB.push_back(0x30); // FRet64 FR0
+    CB.push_back(RegGroup);
+    CB.push_back(static_cast<char>((RegFRet64 << 4) | 0)); // FR0
     break;
   case CBC::FMOV64i: {
     unsigned D = encReg(MI.getOperand(0).getReg());
     uint64_t Bits = static_cast<uint64_t>(MI.getOperand(1).getImm());
-    CB.push_back(0x1C);
+    CB.push_back(FMov64i);
     CB.push_back(static_cast<char>(D & 0xF));
     for (int I = 0; I < 8; ++I)
       CB.push_back(static_cast<char>((Bits >> (8 * I)) & 0xFF));
@@ -117,7 +125,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
   case CBC::FMOV32i: {
     unsigned D = encReg(MI.getOperand(0).getReg());
     uint32_t Bits = static_cast<uint32_t>(MI.getOperand(1).getImm());
-    CB.push_back(0x1B);
+    CB.push_back(FMov32i);
     CB.push_back(static_cast<char>(D & 0xF));
     for (int I = 0; I < 4; ++I)
       CB.push_back(static_cast<char>((Bits >> (8 * I)) & 0xFF));
@@ -151,7 +159,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
   case CBC::UREM32rr: {
     unsigned Opc = MI.getOpcode();
     unsigned Op = 0;
-    uint8_t Opcode = 0x36;
+    uint8_t Opcode = Binary64;
     if (Opc == CBC::SUB32rr || Opc == CBC::SUB64rr)
       Op = 1;
     else if (Opc == CBC::MUL32rr || Opc == CBC::MUL64rr)
@@ -181,7 +189,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
         Opc == CBC::SHL32rr || Opc == CBC::SRL32rr || Opc == CBC::SRA32rr ||
         Opc == CBC::SDIV32rr || Opc == CBC::SREM32rr || Opc == CBC::UDIV32rr ||
         Opc == CBC::UREM32rr)
-      Opcode = 0x35;
+      Opcode = Binary32;
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned L = encReg(MI.getOperand(1).getReg());
     unsigned R = encReg(MI.getOperand(2).getReg());
@@ -217,8 +225,8 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
     uint8_t Opcode =
         (Opc == CBC::ADD32ri || Opc == CBC::AND32ri || Opc == CBC::MUL32ri ||
          Opc == CBC::SHL32ri || Opc == CBC::SRL32ri || Opc == CBC::SRA32ri)
-            ? 0x37
-            : 0x38;
+            ? BinaryImm32
+            : BinaryImm64;
     appendBinImm(CB, Opcode, Op, encReg(MI.getOperand(0).getReg()),
                  encReg(MI.getOperand(1).getReg()), MI.getOperand(2).getImm());
     break;
@@ -226,7 +234,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
   case CBC::FMOV64rr: {
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned S = encReg(MI.getOperand(1).getReg());
-    CB.push_back(0x1A);
+    CB.push_back(FMov64);
     CB.push_back(static_cast<char>((D << 4) | (S & 0xF)));
     break;
   }
@@ -236,7 +244,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
     unsigned Op = static_cast<unsigned>(MI.getOperand(1).getImm());
     unsigned L = encReg(MI.getOperand(2).getReg());
     unsigned R = encReg(MI.getOperand(3).getReg());
-    CB.push_back(MI.getOpcode() == CBC::FBIN32 ? 0x4A : 0x4B);
+    CB.push_back(MI.getOpcode() == CBC::FBIN32 ? Float32 : Float64);
     CB.push_back(static_cast<char>((Op << 4) | (D & 0xF)));
     CB.push_back(static_cast<char>((L << 4) | (R & 0xF)));
     break;
@@ -246,7 +254,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned Op = static_cast<unsigned>(MI.getOperand(1).getImm());
     unsigned S = encReg(MI.getOperand(2).getReg());
-    CB.push_back(MI.getOpcode() == CBC::FUNARY32 ? 0x4A : 0x4B);
+    CB.push_back(MI.getOpcode() == CBC::FUNARY32 ? Float32 : Float64);
     CB.push_back(static_cast<char>((Op << 4) | (D & 0xF)));
     CB.push_back(static_cast<char>(S & 0xF));
     break;
@@ -254,7 +262,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
   case CBC::I2F: {
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned S = encReg(MI.getOperand(1).getReg());
-    CB.push_back(0x4B);
+    CB.push_back(Float64);
     CB.push_back(static_cast<char>((8 << 4) | (D & 0xF)));
     CB.push_back(static_cast<char>(S & 0xF));
     break;
@@ -262,7 +270,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
   case CBC::F2I: {
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned S = encReg(MI.getOperand(1).getReg());
-    CB.push_back(0x4B);
+    CB.push_back(Float64);
     CB.push_back(static_cast<char>((9 << 4) | (D & 0xF)));
     CB.push_back(static_cast<char>(S & 0xF));
     break;
@@ -274,7 +282,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
     unsigned To = static_cast<unsigned>(MI.getOperand(1).getImm());
     unsigned From = static_cast<unsigned>(MI.getOperand(2).getImm());
     unsigned S = encReg(MI.getOperand(3).getReg());
-    CB.push_back(0x39);
+    CB.push_back(Convert);
     CB.push_back(static_cast<char>((To << 4) | (From & 0xF)));
     CB.push_back(static_cast<char>((D << 4) | (S & 0xF)));
     break;
@@ -322,7 +330,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
     unsigned L = encReg(MI.getOperand(2).getReg());
     unsigned R = encReg(MI.getOperand(3).getReg());
     bool F32 = MI.getOperand(4).getImm() != 0;
-    CB.push_back(F32 ? 0x3E : 0x3F);
+    CB.push_back(F32 ? Scc32 : Scc64);
     CB.push_back(static_cast<char>(((CC & 0xF) << 4) | (D & 0xF)));
     CB.push_back(static_cast<char>((L << 4) | (R & 0xF)));
     break;
@@ -332,7 +340,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned L = encReg(MI.getOperand(2).getReg());
     unsigned R = encReg(MI.getOperand(3).getReg());
-    CB.push_back(0x3E);
+    CB.push_back(Scc32);
     CB.push_back(static_cast<char>(((CC & 0xF) << 4) | (D & 0xF)));
     CB.push_back(static_cast<char>((L << 4) | (R & 0xF)));
     break;
@@ -342,7 +350,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned L = encReg(MI.getOperand(2).getReg());
     unsigned R = encReg(MI.getOperand(3).getReg());
-    CB.push_back(0x3F);
+    CB.push_back(Scc64);
     CB.push_back(static_cast<char>(((CC & 0xF) << 4) | (D & 0xF)));
     CB.push_back(static_cast<char>((L << 4) | (R & 0xF)));
     break;
@@ -357,7 +365,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
                     : MI.getOpcode() == CBC::LDRAW64 ? 11
                     : MI.getOpcode() == CBC::LDRAWF32 ? 6
                                                      : 7;
-    appendMem(CB, 0x60, encReg(MI.getOperand(0).getReg()),
+    appendMem(CB, LoadRawMemory, encReg(MI.getOperand(0).getReg()),
               encReg(MI.getOperand(1).getReg()), Kind,
               MI.getOperand(2).getImm());
     break;
@@ -372,7 +380,7 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
                     : MI.getOpcode() == CBC::STRAW64  ? 3
                     : MI.getOpcode() == CBC::STRAWF32 ? 6
                                                       : 7;
-    appendMem(CB, 0x61, encReg(MI.getOperand(0).getReg()),
+    appendMem(CB, StoreRawMemory, encReg(MI.getOperand(0).getReg()),
               encReg(MI.getOperand(1).getReg()), Kind,
               MI.getOperand(2).getImm());
     break;
@@ -380,10 +388,9 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
   case CBC::STU64: {
     unsigned S = encReg(MI.getOperand(0).getReg());
     unsigned Slot = static_cast<unsigned>(MI.getOperand(1).getImm());
-    CB.push_back(0x4F);
+    CB.push_back(StoreUntyped);
     CB.push_back(static_cast<char>((S << 4) | 3));
-    CB.push_back(static_cast<char>(Slot & 0xFF));
-    CB.push_back(static_cast<char>((Slot >> 8) & 0xFF));
+    appendULEB(CB, Slot);
     break;
   }
   case CBC::LDU64:
@@ -391,26 +398,24 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned Slot = static_cast<unsigned>(MI.getOperand(1).getImm());
     unsigned Kind = MI.getOpcode() == CBC::LDUF64 ? 7 : 11;
-    CB.push_back(0x4E);
+    CB.push_back(LoadUntyped);
     CB.push_back(static_cast<char>((D << 4) | Kind));
-    CB.push_back(static_cast<char>(Slot & 0xFF));
-    CB.push_back(static_cast<char>((Slot >> 8) & 0xFF));
+    appendULEB(CB, Slot);
     break;
   }
   case CBC::STUF64: {
     unsigned S = encReg(MI.getOperand(0).getReg());
     unsigned Slot = static_cast<unsigned>(MI.getOperand(1).getImm());
-    CB.push_back(0x4F);
+    CB.push_back(StoreUntyped);
     CB.push_back(static_cast<char>((S << 4) | 7));
-    CB.push_back(static_cast<char>(Slot & 0xFF));
-    CB.push_back(static_cast<char>((Slot >> 8) & 0xFF));
+    appendULEB(CB, Slot);
     break;
   }
   case CBC::LEA_FRAME: {
     unsigned D = encReg(MI.getOperand(0).getReg());
     uint32_t Disp = static_cast<uint32_t>(MI.getOperand(1).getImm());
-    CB.push_back(0x45);
-    CB.push_back(static_cast<char>((0xA << 4) | D));
+    CB.push_back(RegGroup);
+    CB.push_back(static_cast<char>((RegLeaFrame << 4) | D));
     for (unsigned I = 0; I < 4; ++I)
       CB.push_back(static_cast<char>((Disp >> (8 * I)) & 0xFF));
     break;
@@ -419,45 +424,45 @@ void llvm::encodeCBCInst(const MCInst &MI, SmallVectorImpl<char> &CB) {
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned Sz = encReg(MI.getOperand(1).getReg());
     unsigned Log = static_cast<unsigned>(MI.getOperand(2).getImm());
-    CB.push_back(0x45);
-    CB.push_back(static_cast<char>((0xB << 4) | D));
+    CB.push_back(RegGroup);
+    CB.push_back(static_cast<char>((RegAlloca << 4) | D));
     CB.push_back(static_cast<char>((Sz << 4) | (Log & 0xF)));
     break;
   }
   case CBC::STACKSAVE: {
     unsigned D = encReg(MI.getOperand(0).getReg());
-    CB.push_back(0x45);
-    CB.push_back(static_cast<char>((0xC << 4) | D));
+    CB.push_back(RegGroup);
+    CB.push_back(static_cast<char>((RegStackSave << 4) | D));
     break;
   }
   case CBC::STACKRESTORE: {
     unsigned S = encReg(MI.getOperand(0).getReg());
-    CB.push_back(0x45);
-    CB.push_back(static_cast<char>((0xD << 4) | S));
+    CB.push_back(RegGroup);
+    CB.push_back(static_cast<char>((RegStackRestore << 4) | S));
     break;
   }
   case CBC::LD_FCB: {
     unsigned D = encReg(MI.getOperand(0).getReg());
-    CB.push_back(0x45);
-    CB.push_back(static_cast<char>((0xE << 4) | D));
+    CB.push_back(RegGroup);
+    CB.push_back(static_cast<char>((RegLoadFCB << 4) | D));
     break;
   }
   case CBC::CVT_F32_F64: {
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned S = encReg(MI.getOperand(1).getReg());
-    CB.push_back(0x39);
+    CB.push_back(Convert);
     CB.push_back(static_cast<char>((10 << 4) | 9)); // F64 from F32
     CB.push_back(static_cast<char>((D << 4) | (S & 0xF)));
     break;
   }
   case CBC::NULLCHECK:
-    CB.push_back(0x45);
-    CB.push_back(static_cast<char>(0x80));
+    CB.push_back(RegGroup);
+    CB.push_back(static_cast<char>(RegNullCheck << 4));
     break;
   case CBC::LEA_IMAGE: {
     unsigned D = encReg(MI.getOperand(0).getReg());
     unsigned S = encReg(MI.getOperand(1).getReg());
-    CB.push_back(0x7C);
+    CB.push_back(LeaStatic);
     CB.push_back(static_cast<char>((D << 4) | (S & 0xF)));
     CB.push_back(0); // field reference 0, the data image
     break;
@@ -493,7 +498,7 @@ bool llvm::decodeCBCInst(ArrayRef<uint8_t> Bytes, MCInst &MI, uint64_t &Size) {
     Size = 2 + N;
     return true;
   }
-  if (Op == 0x45 && Bytes.size() >= 2 && Bytes[1] == 0x11) {
+  if (Op == RegGroup && Bytes.size() >= 2 && Bytes[1] == ((RegRet64 << 4) | 1)) {
     MI.setOpcode(CBC::RET);
     Size = 2;
     return true;

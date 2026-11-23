@@ -1,4 +1,5 @@
 #include "CBCFileWriter.h"
+#include "MCTargetDesc/CBCOpcodes.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -8,6 +9,23 @@
 #include <utility>
 
 using namespace llvm;
+
+namespace {
+/// Ids 0..20 are the predefined terms (builtin types and the variadic label);
+/// pool term `i` has id FirstTermId + i (FIRST_NON_PRIMITIVE_TERM_ID).
+constexpr uint32_t FirstTermId = 21;
+constexpr uint32_t VarArgLabelTerm = 20;
+constexpr uint32_t I64Term = 12;
+constexpr uint32_t F64Term = 19;
+
+/// Method reference flags byte (src/engine/decode/reader.cpp).
+constexpr uint8_t RefAbiKindC = 7 << 3;
+/// Method definition flags (same file): PUBLIC | FOREIGN | AOT | abiKind C.
+constexpr uint16_t DefPublic = 0x0001;
+constexpr uint16_t DefForeign = 0x0010;
+constexpr uint16_t DefAot = 0x0100;
+constexpr uint16_t DefAbiKindC = 0x7000;
+} // namespace
 
 static void appendULEB(std::string &O, uint64_t N) {
   while (true) {
@@ -88,20 +106,20 @@ static void appendSLEB(std::string &O, int64_t V) {
 }
 
 static void emitInitStr(std::string &O, uint32_t PoolOff, uint16_t Slot) {
-  O.push_back(0x47);
+  O.push_back(CBCISA::InitString);
   appendULEB(O, PoolOff);
-  appendU16(O, Slot);
+  appendULEB(O, Slot);
 }
 
 static void emitLdStackRec(std::string &O, unsigned D, uint16_t Slot) {
-  O.push_back(0x4C);
+  O.push_back(CBCISA::LoadStackRec);
   O.push_back(static_cast<char>(D << 4));
-  appendU16(O, Slot);
+  appendULEB(O, Slot);
 }
 
 static void emitLdRaw64(std::string &O, unsigned D, unsigned Base, int64_t Disp) {
   unsigned Lo = static_cast<unsigned>(Disp) & 0xF;
-  O.push_back(0x60);
+  O.push_back(CBCISA::LoadRawMemory);
   O.push_back(static_cast<char>((D << 4) | (Base & 0xF)));
   O.push_back(static_cast<char>((11 << 4) | Lo));
   appendSLEB(O, Disp >> 4);
@@ -109,34 +127,38 @@ static void emitLdRaw64(std::string &O, unsigned D, unsigned Base, int64_t Disp)
 
 static void emitAddi(std::string &O, unsigned D, unsigned L, int64_t Imm) {
   unsigned Lo = static_cast<unsigned>(Imm) & 0xF;
-  O.push_back(0x38);
+  O.push_back(CBCISA::BinaryImm64);
   O.push_back(static_cast<char>(D & 0xF));
   O.push_back(static_cast<char>((L << 4) | Lo));
   appendSLEB(O, Imm >> 4);
 }
 
 static void emitMovRR(std::string &O, unsigned D, unsigned S) {
-  O.push_back(0x15);
+  O.push_back(CBCISA::Mov64);
   O.push_back(static_cast<char>((D << 4) | (S & 0xF)));
 }
 
 static void emitMovRI(std::string &O, unsigned D, int64_t Imm) {
   unsigned Lo = static_cast<unsigned>(Imm) & 0xF;
-  O.push_back(0x17);
+  O.push_back(CBCISA::Mov64i);
   O.push_back(static_cast<char>((D << 4) | Lo));
   appendSLEB(O, Imm >> 4);
 }
 
 static void emitLeaImage(std::string &O, unsigned D, unsigned Scratch) {
-  O.push_back(0x7C);
+  O.push_back(CBCISA::LeaStatic);
   O.push_back(static_cast<char>((D << 4) | (Scratch & 0xF)));
   O.push_back(0);
 }
 
-static void emitCall(std::string &O, unsigned Idx, SmallVectorImpl<uint32_t> &Ends) {
-  O.push_back(0x44);
-  O.push_back(0x31);
+/// call.direct with the arguments already in IR1.. (identity Locations).
+static void emitCall(std::string &O, unsigned Idx, unsigned NArgs,
+                     SmallVectorImpl<uint32_t> &Ends) {
+  O.push_back(CBCISA::CallDirect);
   appendULEB(O, Idx);
+  for (unsigned I = 1; I <= NArgs; ++I)
+    appendULEB(O, I + 1); // IR<I>, encoded as index + 1
+  O.push_back(0);
   Ends.push_back(static_cast<uint32_t>(O.size()));
 }
 
@@ -157,7 +179,7 @@ static std::string imagePrologue(uint32_t BlobOff, StringRef Blob, uint32_t Relo
     emitAddi(O, 2, 2, 16);
     emitLeaImage(O, 1, 5);
     emitMovRI(O, 3, static_cast<int64_t>(Blob.size()));
-    emitCall(O, MemcpyIdx, CallEnds);
+    emitCall(O, MemcpyIdx, 3, CallEnds);
     Slots.push_back(TupleId);
     ++Slot;
   }
@@ -171,7 +193,7 @@ static std::string imagePrologue(uint32_t BlobOff, StringRef Blob, uint32_t Relo
     emitLeaImage(O, 1, 6);
     emitMovRI(O, 3, static_cast<int64_t>(Relocs.size() / 4));
     emitMovRR(O, 4, 1);
-    emitCall(O, ApplyIdx, CallEnds);
+    emitCall(O, ApplyIdx, 4, CallEnds);
     Slots.push_back(TupleId);
   }
   return O;
@@ -206,6 +228,7 @@ static std::string codeBlock(const CBCCompiledMethod &M) {
   appendULEB(O, M.Code.size());
   appendULEB(O, 0); // literals
   O.append(reinterpret_cast<const char *>(M.Code.data()), M.Code.size());
+  appendULEB(O, 0); // source code info
   appendULEB(O, Ex.size());
   O += Ex;
   appendULEB(O, Live.size());
@@ -288,7 +311,7 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
   for (const CBCCompiledMethod &M : Methods)
     NameOffs.push_back(addString(M.Name));
 
-  // Term 20: FUNCTIONAL(0 params, I64). Term 21: REF entry.
+  // Pool term 0: FUNCTIONAL(0 params, I64). Pool term 1: REF entry.
   uint32_t TSig = add(std::string("\x0C\x00\x0C", 3));
   std::string Ref = std::string("\x01", 1) + ulebStr(SEntry);
   uint32_t TRef = add(Ref);
@@ -296,66 +319,54 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
   TermOffs.push_back(TSig);
   TermOffs.push_back(TRef);
 
-  bool AnyNative = false;
-  for (const CBCNativeCallee &C : Callees)
-    AnyNative |= C.Native;
-  uint32_t NativeTermId = 0;
-  if (AnyNative) {
-    uint32_t SNative = addString("cbc.native");
-    TermOffs.push_back(add(std::string("\x02", 1) + ulebStr(SNative)));
-    NativeTermId = 20 + TermOffs.size() - 1;
-  }
-
   uint32_t DataRefId = 0, FstId = 0, SImageName = 0, SData = 0, FieldDefOff = 0;
   if (Image.SizeBytes) {
     uint32_t NU64 = std::max<uint32_t>(1, (Image.SizeBytes + 7) / 8);
     SData = addString("$cbc.ex:Data");
     SImageName = addString("image");
     TermOffs.push_back(add(std::string("\x01", 1) + ulebStr(SData)));
-    DataRefId = 20 + TermOffs.size() - 1;
+    DataRefId = FirstTermId + TermOffs.size() - 1;
     std::string Va;
     Va.push_back(0x04);
     appendULEB(Va, NU64);
     appendULEB(Va, 13); // U64
     TermOffs.push_back(add(Va));
-    uint32_t VaId = 20 + TermOffs.size() - 1;
+    uint32_t VaId = FirstTermId + TermOffs.size() - 1;
     std::string Fst;
     Fst.push_back(0x14);
     appendULEB(Fst, VaId);
     TermOffs.push_back(add(Fst));
-    FstId = 20 + TermOffs.size() - 1;
+    FstId = FirstTermId + TermOffs.size() - 1;
   }
 
   auto sigTerm = [&](const CBCNativeCallee &C) -> uint32_t {
     if (C.Params.empty() && !C.RetFloat)
-      return 20;
+      return FirstTermId;
     std::string Sig;
     Sig.push_back(0x0C);
     Sig.push_back(static_cast<char>(C.Params.size()));
     for (char K : C.Params)
-      appendULEB(Sig, K == 'f' ? 19 : 12);
-    appendULEB(Sig, C.RetFloat ? 19 : 12);
+      appendULEB(Sig, K == '.' ? VarArgLabelTerm : K == 'f' ? F64Term : I64Term);
+    appendULEB(Sig, C.RetFloat ? F64Term : I64Term);
     TermOffs.push_back(add(Sig));
-    return 20 + TermOffs.size() - 1;
+    return FirstTermId + TermOffs.size() - 1;
   };
 
+  // Every method reference is of ABI kind C: the engine stages its arguments by
+  // the host C rules, so the signature is the lowered C signature. Natives are
+  // resolved through FOREIGN method definitions (below); a synthetic reference
+  // only carries the signature of a `call.indirect`.
   SmallVector<uint32_t, 8> MRefs, SigIds, NameStr;
+  uint32_t EmptyName = addString("");
   for (const CBCNativeCallee &C : Callees) {
-    NameStr.push_back(addString(C.Name));
-    uint32_t Sid = sigTerm(C);
-    // Fix: sigTerm returns 19+size after push, which is 20+index. Good.
-    SigIds.push_back(Sid);
+    NameStr.push_back(C.Synthetic ? EmptyName : addString(C.Name));
+    SigIds.push_back(sigTerm(C));
   }
   for (size_t I = 0; I < Callees.size(); ++I) {
     std::string RefBytes;
     appendU32(RefBytes, NameStr[I]);
-    if (Callees[I].Native) {
-      RefBytes.push_back(0x20); // AOT
-      appendULEB(RefBytes, NativeTermId);
-    } else {
-      RefBytes.push_back(0); // CBC method on the entry type
-      appendULEB(RefBytes, 21);
-    }
+    RefBytes.push_back(static_cast<char>(RefAbiKindC));
+    appendULEB(RefBytes, FirstTermId + 1); // entry type
     appendULEB(RefBytes, SigIds[I]);
     MRefs.push_back(add(RefBytes));
   }
@@ -368,7 +379,7 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
     appendULEB(Tup, 13); // U64
     appendULEB(Tup, 13);
     TermOffs.push_back(add(Tup));
-    TupleId = 20 + TermOffs.size() - 1;
+    TupleId = FirstTermId + TermOffs.size() - 1;
   }
   // Blobs go in before method code so their pool offsets do not depend on it.
   if (NeedBlob)
@@ -386,7 +397,7 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
           imagePrologue(BlobOff, NeedBlob ? StringRef(Image.Blob) : StringRef(),
                         RelocOff, NeedRelocs ? StringRef(Image.Relocs) : StringRef(),
                         MemcpyIdx, ApplyIdx, TupleId, CallEnds, Slots);
-      if (NeedBlob && Pro.find(static_cast<char>(0x47)) == std::string::npos)
+      if (NeedBlob && Pro.find(static_cast<char>(CBCISA::InitString)) == std::string::npos)
         report_fatal_error("CBC image prologue is missing initstr");
       for (CBCCompiledMethod::ExRegion &R : Patched.Regions) {
         R.Start += Pro.size();
@@ -417,7 +428,7 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
     appendU32(Def, SEntry);
     Def.push_back(0); // region
     appendULEB(Def, MethodSigs[I]);
-    appendU16(Def, 0x0005); // PUBLIC|STATIC
+    appendU16(Def, DefPublic | DefAbiKindC);
     Def.push_back(0x01);
     appendULEB(Def, Codes[I]);
     Def.push_back(0);
@@ -430,6 +441,39 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
     if (M.Name == "__cbc_lib_start" || M.DefaultVis || M.AddressTaken)
       Exports.push_back({M.Name, Off, M.DefaultVis, M.AddressTaken, M.VarArg,
                          M.Params, M.RetFloat, M.MaxCalleeStackArgs});
+  }
+
+  // Natives (declarations resolved by the dynamic loader) are FOREIGN method
+  // definitions of the entry type: AOT handle, linkage name, no code. The
+  // engine looks the symbol up in the foreign libraries (libc, the executable
+  // and the file's libraries). For a variadic native the definition lists the
+  // fixed parameters and the variadic label; each call site's reference adds
+  // its actual variadic arguments.
+  StringMap<uint32_t> ForeignDefs;
+  for (size_t I = 0; I < Callees.size(); ++I) {
+    const CBCNativeCallee &C = Callees[I];
+    if (!C.Native || C.Synthetic)
+      continue;
+    std::string DefParams = C.Params;
+    size_t Label = DefParams.find('.');
+    if (Label != std::string::npos)
+      DefParams.resize(Label + 1);
+    std::string Key = C.Name + ":" + DefParams + ":" + (C.RetFloat ? "f" : "i");
+    if (ForeignDefs.count(Key))
+      continue;
+    CBCNativeCallee DefSig{C.Name, true, DefParams, C.RetFloat, false};
+    std::string Def;
+    appendU32(Def, NameStr[I]);
+    appendU32(Def, SEntry);
+    Def.push_back(0); // region
+    appendULEB(Def, sigTerm(DefSig));
+    appendU16(Def, DefPublic | DefForeign | DefAot | DefAbiKindC);
+    Def.push_back(0x04); // linkage name
+    appendULEB(Def, NameStr[I]);
+    Def.push_back(0);
+    uint32_t Off = add(Def);
+    ForeignDefs[Key] = Off;
+    MDefs.push_back(Off);
   }
 
   std::string Type;
@@ -491,7 +535,7 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
   for (const auto &AT : ATypes) {
     uint32_t SName = addString(AT.Name);
     TermOffs.push_back(add(std::string("\x0D", 1) + ulebStr(SName))); // REC
-    uint32_t RecId = 20 + TermOffs.size() - 1;
+    uint32_t RecId = FirstTermId + TermOffs.size() - 1;
 
     std::string FDef;
     appendU32(FDef, SV);
@@ -521,15 +565,8 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
     FRefs.push_back(add(FRef));
   }
 
-  SmallVector<uint32_t, 8> AotEntryOffs;
-  for (size_t I = 0; I < Callees.size(); ++I) {
-    if (!Callees[I].Native)
-      continue;
-    std::string Ent;
-    appendU32(Ent, I);
-    appendU32(Ent, NameStr[I]);
-    AotEntryOffs.push_back(add(Ent));
-  }
+  // No AOT (Cangjie) references: all direct-call AOT tables are empty.
+  SmallVector<uint32_t, 1> AotEntryOffs;
 
   const uint32_t Base = 57;
   uint32_t TypeIndexAt = Base + Pool.size();
@@ -593,8 +630,9 @@ CBCFileBuildResult llvm::buildCBCFile(ArrayRef<CBCCompiledMethod> MethodsIn,
   auto putS32 = [&](unsigned At, int32_t V) { putU32(At, static_cast<uint32_t>(V)); };
   putS32(40, HasMainMethod ? static_cast<int32_t>(SEntry) : -1);
   putS32(44, -1);
-  putS32(48, SAotDeps == UINT32_MAX ? -1 : static_cast<int32_t>(SAotDeps));
-  putS32(52, -1);
+  putS32(48, -1); // no Cangjie AOT dependencies
+  // Libraries of the natives (names without lib / .so) are foreign libraries.
+  putS32(52, SAotDeps == UINT32_MAX ? -1 : static_cast<int32_t>(SAotDeps));
 
   CBCFileBuildResult Result;
   Result.Bytes =

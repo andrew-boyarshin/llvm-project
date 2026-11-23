@@ -445,6 +445,10 @@ Properties:
 * Native function pointers received from native code (`dlsym`, `signal`'s return value,
   fields of native structures) are native addresses and work with no special handling.
 
+> **Rebased design (2026-11-23).** The descriptor region described in §7.1–§7.3 was replaced by
+> N2C stubs, and calls now carry explicit argument locations and a C-kind method reference
+> (`13-engine-changes.md` §13). The tables below are kept for history.
+
 ### 7.2 Indirect calls
 
 Every indirect call `call %fp(args)` is lowered as an ordinary call with the target in a

@@ -1,8 +1,10 @@
 #include "CBC.h"
+#include "CBCCallInfo.h"
 #include "CBCFileWriter.h"
 #include "CBCSubtarget.h"
 #include "CBCTargetMachine.h"
 #include "MCTargetDesc/CBCEncoding.h"
+#include "MCTargetDesc/CBCOpcodes.h"
 #include "TargetInfo/CBCTargetInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/Support/raw_ostream.h"
@@ -27,15 +29,16 @@ class CBCAsmPrinter : public AsmPrinter {
   StringMap<unsigned> NativeIndex;
 
   unsigned internNative(StringRef Name, bool Native, StringRef Params,
-                        bool RetFloat) {
+                        bool RetFloat, bool Synthetic = false) {
     std::string Key;
     raw_string_ostream OS(Key);
-    OS << Name << ":" << Native << ":" << Params << ":" << RetFloat;
+    OS << Name << ":" << Native << ":" << Params << ":" << RetFloat << ":"
+       << Synthetic;
     auto It = NativeIndex.find(Key);
     if (It != NativeIndex.end())
       return It->second;
     unsigned Idx = Natives.size();
-    Natives.push_back({Name.str(), Native, Params.str(), RetFloat});
+    Natives.push_back({Name.str(), Native, Params.str(), RetFloat, Synthetic});
     NativeIndex[Key] = Idx;
     return Idx;
   }
@@ -100,54 +103,54 @@ class CBCAsmPrinter : public AsmPrinter {
                      unsigned XCHG, unsigned FADD, unsigned FSUB, unsigned FAND,
                      unsigned FOR, unsigned FXOR) {
       if (Opc == LD) {
-        IsaOpc = 0x65;
+        IsaOpc = CBCISA::AtomicLoad;
         Width = W;
         return true;
       }
       if (Opc == ST) {
-        IsaOpc = 0x66;
+        IsaOpc = CBCISA::AtomicStore;
         Width = W;
         IsStore = true;
         return true;
       }
       if (Opc == CAS) {
-        IsaOpc = 0x67;
+        IsaOpc = CBCISA::CAS;
         Width = W;
         IsCas = true;
         return true;
       }
       if (Opc == XCHG) {
-        IsaOpc = 0x68;
+        IsaOpc = CBCISA::Swap;
         Width = W;
         IsFetch = true;
         return true;
       }
       if (Opc == FADD) {
-        IsaOpc = 0x69;
+        IsaOpc = CBCISA::AtomicFetchAdd;
         Width = W;
         IsFetch = true;
         return true;
       }
       if (Opc == FSUB) {
-        IsaOpc = 0x6A;
+        IsaOpc = CBCISA::AtomicFetchSub;
         Width = W;
         IsFetch = true;
         return true;
       }
       if (Opc == FAND) {
-        IsaOpc = 0x6B;
+        IsaOpc = CBCISA::AtomicFetchAnd;
         Width = W;
         IsFetch = true;
         return true;
       }
       if (Opc == FOR) {
-        IsaOpc = 0x6C;
+        IsaOpc = CBCISA::AtomicFetchOr;
         Width = W;
         IsFetch = true;
         return true;
       }
       if (Opc == FXOR) {
-        IsaOpc = 0x6D;
+        IsaOpc = CBCISA::AtomicFetchXor;
         Width = W;
         IsFetch = true;
         return true;
@@ -203,6 +206,17 @@ class CBCAsmPrinter : public AsmPrinter {
     return true;
   }
 
+  /// 'i' / 'f' per IR parameter, '.' before the variadic arguments of a
+  /// variadic function (only the fixed ones are listed for a declaration).
+  static std::string irParams(const Function &F) {
+    std::string Params;
+    for (const Argument &Arg : F.args())
+      Params.push_back(Arg.getType()->isFloatingPointTy() ? 'f' : 'i');
+    if (F.isVarArg())
+      Params.push_back('.');
+    return Params;
+  }
+
   void encodeFnPtr(const MachineInstr &MI, SmallVectorImpl<char> &Buf) {
     const GlobalValue *GV = nullptr;
     Register Dest;
@@ -217,15 +231,67 @@ class CBCAsmPrinter : public AsmPrinter {
     std::string Params;
     bool RetFloat = false;
     if (const auto *F = dyn_cast<Function>(GV)) {
-      for (const Argument &Arg : F->args())
-        Params.push_back(Arg.getType()->isFloatingPointTy() ? 'f' : 'i');
+      Params = irParams(*F);
       RetFloat = F->getReturnType()->isFloatingPointTy();
     }
     unsigned Idx = internNative(GV->getName(), GV->isDeclarationForLinker(),
                                 Params, RetFloat);
-    Buf.push_back(0x44);
-    Buf.push_back(static_cast<char>((0xD << 4) | (cbcEncodeReg(Dest) & 0xF)));
+    Buf.push_back(CBCISA::RegSymGroup);
+    Buf.push_back(static_cast<char>((CBCISA::SymLoadFuncPtr << 4) |
+                                    (cbcEncodeReg(Dest) & 0xF)));
     appendULEB(Buf, Idx);
+  }
+
+  /// The signature and argument locations that LowerCall attached to a call.
+  struct CallDesc {
+    std::string Params; // 'i' / 'f' / '.' (variadic label), lowered
+    bool RetFloat = false;
+    SmallVector<unsigned, 16> Locs;
+  };
+
+  static CallDesc parseCallDesc(const MachineInstr &MI) {
+    SmallVector<int64_t, 32> Imms;
+    for (const MachineOperand &MO : MI.operands())
+      if (MO.isImm())
+        Imms.push_back(MO.getImm());
+    CallDesc D;
+    size_t P = 0;
+    auto next = [&]() -> int64_t {
+      if (P >= Imms.size())
+        report_fatal_error("CBC call is missing its signature operands");
+      return Imms[P++];
+    };
+    P += next();                // register arguments, consumed by isel
+    D.RetFloat = next() != 0;
+    for (int64_t N = next(); N > 0; --N) {
+      switch (next()) {
+      case CBCCall::SigInt:
+        D.Params.push_back('i');
+        break;
+      case CBCCall::SigFloat:
+        D.Params.push_back('f');
+        break;
+      default:
+        D.Params.push_back('.');
+        break;
+      }
+    }
+    for (int64_t N = next(); N > 0; --N)
+      D.Locs.push_back(static_cast<unsigned>(next()));
+    return D;
+  }
+
+  /// Argument list shared by the direct and indirect call encodings: the
+  /// location of every argument (not the variadic label), 0-terminated.
+  void appendLocations(const CallDesc &D, SmallVectorImpl<char> &Buf) {
+    unsigned NArgs = 0;
+    for (char K : D.Params)
+      NArgs += K != '.';
+    if (NArgs != D.Locs.size())
+      report_fatal_error("CBC call signature does not match its arguments");
+    for (unsigned L : D.Locs)
+      appendULEB(Buf, L + 1);
+    Buf.push_back(0);
   }
 
   void encodeIndirect(const MachineInstr &MI, SmallVectorImpl<char> &Buf) {
@@ -238,48 +304,54 @@ class CBCAsmPrinter : public AsmPrinter {
     }
     if (!Tgt)
       report_fatal_error("CBC call.indirect is missing its target");
-    Buf.push_back(0x45);
-    Buf.push_back(static_cast<char>((0x9 << 4) | (cbcEncodeReg(Tgt) & 0xF)));
+    CallDesc D = parseCallDesc(MI);
+    // One synthetic method reference of ABI kind C per lowered function type;
+    // it only carries the signature.
+    unsigned Idx = internNative("", /*Native=*/false, D.Params, D.RetFloat,
+                                /*Synthetic=*/true);
+    Buf.push_back(CBCISA::CallIndirect);
+    Buf.push_back(static_cast<char>((cbcEncodeReg(Tgt) & 0xF) << 4));
+    appendULEB(Buf, Idx);
+    appendLocations(D, Buf);
   }
 
   void encodeCall(const MachineInstr &MI, SmallVectorImpl<char> &Buf) {
     StringRef Name;
     bool Native = true;
-    SmallVector<int64_t, 8> Imms;
+    const Function *CalleeFn = nullptr;
     for (const MachineOperand &MO : MI.operands()) {
-      if (MO.isReg())
-        continue;
       if (MO.isGlobal()) {
         Name = MO.getGlobal()->getName();
         Native = MO.getGlobal()->isDeclarationForLinker();
+        CalleeFn = dyn_cast<Function>(MO.getGlobal());
       } else if (MO.isSymbol()) {
         Name = MO.getSymbolName();
         Native = true;
-      } else if (MO.isImm())
-        Imms.push_back(MO.getImm());
+      }
     }
-    unsigned NParams = Imms.empty() ? 0 : Imms[0];
-    std::string Params;
-    for (unsigned I = 0; I < NParams && I + 1 < Imms.size(); ++I)
-      Params.push_back(Imms[I + 1] ? 'f' : 'i');
-    bool RetFloat = Imms.size() > NParams + 1 && Imms[NParams + 1];
-    const Function *CalleeFn = nullptr;
-    for (const MachineOperand &MO : MI.operands()) {
-      if (MO.isGlobal())
-        CalleeFn = dyn_cast<Function>(MO.getGlobal());
-    }
-    // The call instruction lists only register arguments. The engine matches
-    // the full LLVM argument list, including values passed in stack slots.
-    if (!Native && CalleeFn && !CalleeFn->isDeclarationForLinker()) {
-      Params.clear();
-      for (const Argument &Arg : CalleeFn->args())
-        Params.push_back(Arg.getType()->isFloatingPointTy() ? 'f' : 'i');
-      RetFloat = CalleeFn->getReturnType()->isFloatingPointTy();
+    CallDesc D = parseCallDesc(MI);
+    std::string Params = D.Params;
+    bool RetFloat = D.RetFloat;
+    // A callee defined here is matched by name and signature against its
+    // definition, which uses the IR parameter list. The lowered list must have
+    // the same length (no split / byval arguments get this far).
+    if (!Native && CalleeFn && !CalleeFn->isVarArg()) {
+      // One extra lowered argument is the hidden pointer of a demoted return.
+      size_t Extra = D.Locs.size() - std::min(D.Locs.size(), CalleeFn->arg_size());
+      if (D.Locs.size() < CalleeFn->arg_size() || Extra > 1)
+        report_fatal_error("CBC call to '" + Name +
+                           "' passes a different number of lowered arguments than the callee declares");
+      Params = irParams(*CalleeFn);
+      RetFloat = Extra == 0 && CalleeFn->getReturnType()->isFloatingPointTy();
+      if (Extra == 1)
+        Params.insert(Params.begin(), 'i');
     }
     unsigned Idx = internNative(Name, Native, Params, RetFloat);
-    Buf.push_back(0x44);
-    Buf.push_back(0x31);
+    Buf.push_back(CBCISA::CallDirect);
     appendULEB(Buf, Idx);
+    CallDesc Placed = D;
+    Placed.Params = Params;
+    appendLocations(Placed, Buf);
   }
 
   std::vector<uint32_t> StatePoints;
@@ -597,9 +669,13 @@ public:
     M.Code.assign(reinterpret_cast<const uint8_t *>(Buf.begin()),
                   reinterpret_cast<const uint8_t *>(Buf.end()));
     const Function &Fn = MF.getFunction();
+    // A demoted return adds a hidden pointer parameter in front (and the
+    // function returns nothing in registers).
+    if (Info->DemotedSRet)
+      M.Params.push_back('i');
     for (const Argument &Arg : Fn.args())
       M.Params.push_back(Arg.getType()->isFloatingPointTy() ? 'f' : 'i');
-    M.RetFloat = Fn.getReturnType()->isFloatingPointTy();
+    M.RetFloat = !Info->DemotedSRet && Fn.getReturnType()->isFloatingPointTy();
     // Default-visibility *external* defs are N2C-stub candidates; local
     // linkage still uses VisibilityTypes::DefaultVisibility in LLVM IR.
     M.DefaultVis = !Fn.hasLocalLinkage() &&

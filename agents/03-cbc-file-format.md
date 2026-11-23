@@ -440,3 +440,10 @@ code (Prog.__cbc_c_main):
 ```
 
 The real entry method also runs the startup sequence (`10-linker-and-runtime.md` §6).
+
+## Appendix — engine master dialect (2026-11-23)
+
+The engine was rebased onto master; term ids, flag packing, the method-code layout, the
+header's foreign-library slot, opcode numbers and several operand formats changed, and every
+ClangCBC method is `MethodAbiKind::C`. The tables above describe the fork-era layout. The
+current layout, and what the backend emits, is `13-engine-changes.md` §13.

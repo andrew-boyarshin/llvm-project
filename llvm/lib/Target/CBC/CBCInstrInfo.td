@@ -143,7 +143,7 @@ def SELECT_FPR : CBCInst<(outs FPR:$d),
   let usesCustomInserter = 1;
 }
 def SELECT_FPR_I : CBCInst<(outs FPR:$d),
-    (ins i32imm:$cc, GPR:$l, GPR:$r, FPR:$t, FPR:$f), "selectfi $d, $l, $r"> {
+    (ins i32imm:$cc, GPR:$l, GPR:$r, FPR:$t, FPR:$f, i32imm:$w32), "selectfi $d, $l, $r"> {
   let usesCustomInserter = 1;
 }
 

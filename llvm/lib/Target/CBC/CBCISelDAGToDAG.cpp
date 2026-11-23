@@ -440,7 +440,7 @@ public:
         SDValue Zero = CurDAG->getRegister(CBC::IRZ, MVT::i64);
         if (ResFloat) {
           SDValue Ops[] = {CurDAG->getTargetConstant(1, DL, MVT::i32), Flag,
-                           Zero, T, F};
+                           Zero, T, F, W32False};
           CurDAG->SelectNodeTo(N, CBC::SELECT_FPR_I, N->getValueType(0), Ops);
         } else {
           // Flag is a clean i64 0/1 from SCCF; BCC64 is fine.
@@ -493,7 +493,10 @@ public:
                          CurDAG->getTargetConstant(F32 ? 1 : 0, DL, MVT::i32)};
         CurDAG->SelectNodeTo(N, CBC::SELECT_FPR, N->getValueType(0), Ops);
       } else if (ResFloat) {
-        SDValue Ops[] = {CCImm, CmpL, CmpR, T, F};
+        // The compare operands may be 32-bit values whose upper register half is
+        // unspecified: compare them as 32-bit.
+        SDValue Ops[] = {CCImm, CmpL, CmpR, T, F,
+                         CurDAG->getTargetConstant(UseW32 ? 1 : 0, DL, MVT::i32)};
         CurDAG->SelectNodeTo(N, CBC::SELECT_FPR_I, N->getValueType(0), Ops);
       } else {
         SDValue Ops[] = {

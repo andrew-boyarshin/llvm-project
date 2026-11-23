@@ -1,11 +1,14 @@
 #include "CBCISelLowering.h"
 #include "CBC.h"
+#include "CBCCallInfo.h"
+#include "MCTargetDesc/CBCEncoding.h"
 #include "CBCSubtarget.h"
 #include "CBCTargetMachine.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/SelectionDAG.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/MathExtras.h"
@@ -202,11 +205,53 @@ SDValue CBCTargetLowering::LowerReturn(
   return SDValue(DAG.getMachineNode(Opc, DL, MVT::Other, RetOps), 0);
 }
 
+/// The engine places ClangCBC call arguments itself (MethodAbiKind::C) and
+/// cannot see `byval` aggregates or `i128` in a lowered signature, which would
+/// look like plain I64 words. Anything it does not model is rejected here.
+template <typename ArgT>
+static bool rejectUnsupportedArgs(SelectionDAG &DAG, const SDLoc &DL,
+                                  const SmallVectorImpl<ArgT> &Args,
+                                  StringRef Where, StringRef Callee) {
+  for (const ArgT &A : Args) {
+    const char *What = nullptr;
+    if (A.Flags.isByVal())
+      What = "by-value (byval) aggregate parameters";
+    else if (A.Flags.isSplit())
+      What = "parameters wider than 64 bits (such as __int128)";
+    if (!What)
+      continue;
+    std::string Msg =
+        (Twine("CBC does not support ") + What + " in " + Where +
+         (Callee.empty() ? Twine() : Twine(" of '") + Callee + "'") +
+         " (function '" + DAG.getMachineFunction().getName() + "')")
+            .str();
+    // A DiagnosticInfoUnsupported is only a warning-like error under LTO: lld
+    // prints it and still writes an executable that crashes at run time. Fail
+    // the compilation cleanly instead, as CBCRejectUnsupportedIR does.
+    report_fatal_error(StringRef(Msg), /*GenCrashDiag=*/false);
+    return true;
+  }
+  return false;
+}
+
 SDValue CBCTargetLowering::LowerCall(CallLoweringInfo &CLI,
                                      SmallVectorImpl<SDValue> &InVals) const {
   SelectionDAG &DAG = CLI.DAG;
   SDLoc DL = CLI.DL;
   CLI.IsTailCall = false;
+  {
+    StringRef Name;
+    if (auto *G = dyn_cast<GlobalAddressSDNode>(CLI.Callee))
+      Name = G->getGlobal()->getName();
+    else if (auto *E = dyn_cast<ExternalSymbolSDNode>(CLI.Callee))
+      Name = E->getSymbol() ? E->getSymbol() : "";
+    if (rejectUnsupportedArgs(DAG, DL, CLI.Outs, "a call", Name)) {
+      // Keep going with a well-formed (but unused) result; the diagnostic is an error.
+      for (const ISD::InputArg &In : CLI.Ins)
+        InVals.push_back(DAG.getUNDEF(In.VT));
+      return CLI.Chain;
+    }
+  }
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CLI.CallConv, CLI.IsVarArg, DAG.getMachineFunction(), ArgLocs,
                  *DAG.getContext());
@@ -215,10 +260,17 @@ SDValue CBCTargetLowering::LowerCall(CallLoweringInfo &CLI,
   SDValue Chain = CLI.Chain;
   SDValue Glue;
   std::string Params;
+  // Lowered signature and the source Location of every argument (CBCCallInfo.h).
+  SmallVector<int, 16> SigKinds;
+  SmallVector<unsigned, 16> Locs;
   MachineRegisterInfo &MRI = DAG.getMachineFunction().getRegInfo();
   for (unsigned I = 0; I != ArgLocs.size(); ++I) {
     CCValAssign &VA = ArgLocs[I];
     SDValue Val = CLI.OutVals[I];
+    if (CLI.IsVarArg && I == CLI.NumFixedArgs)
+      SigKinds.push_back(CBCCall::SigVarArgLabel);
+    SigKinds.push_back(VA.getLocVT().isFloatingPoint() ? CBCCall::SigFloat
+                                                         : CBCCall::SigInt);
     if (VA.isMemLoc()) {
       if (Val.getValueType() == MVT::i32)
         Val = DAG.getNode(ISD::ZERO_EXTEND, DL, MVT::i64, Val);
@@ -233,6 +285,7 @@ SDValue CBCTargetLowering::LowerCall(CallLoweringInfo &CLI,
       // while the store depends on the copy.
       Chain = DAG.getCopyToReg(Chain, DL, VReg, Val);
       unsigned Slot = VA.getLocMemOffset() / 8;
+      Locs.push_back(CBCCall::slotLoc(Slot));
       auto *Info =
           DAG.getMachineFunction().getInfo<CBCMachineFunctionInfo>();
       Info->MaxOutgoingSlots = std::max(Info->MaxOutgoingSlots, Slot + 1);
@@ -243,6 +296,9 @@ SDValue CBCTargetLowering::LowerCall(CallLoweringInfo &CLI,
       continue;
     }
     Params.push_back(VA.getLocVT().isFloatingPoint() ? 'f' : 'i');
+    Locs.push_back(VA.getLocVT().isFloatingPoint()
+                       ? CBCCall::floatRegLoc(cbcEncodeReg(VA.getLocReg()))
+                       : CBCCall::intRegLoc(cbcEncodeReg(VA.getLocReg())));
     Chain = DAG.getCopyToReg(Chain, DL, VA.getLocReg(), CLI.OutVals[I], Glue);
     Glue = Chain.getValue(1);
   }
@@ -296,6 +352,13 @@ SDValue CBCTargetLowering::LowerCall(CallLoweringInfo &CLI,
   for (char K : Params)
     Ops.push_back(DAG.getTargetConstant(K == 'f' ? 1 : 0, DL, MVT::i32));
   Ops.push_back(DAG.getTargetConstant(RetFloat ? 1 : 0, DL, MVT::i32));
+  // Lowered signature and argument locations for the engine (CBCCallInfo.h).
+  Ops.push_back(DAG.getTargetConstant(SigKinds.size(), DL, MVT::i32));
+  for (int K : SigKinds)
+    Ops.push_back(DAG.getTargetConstant(K, DL, MVT::i32));
+  Ops.push_back(DAG.getTargetConstant(Locs.size(), DL, MVT::i32));
+  for (unsigned L : Locs)
+    Ops.push_back(DAG.getTargetConstant(L, DL, MVT::i32));
   const uint32_t *Mask =
       DAG.getSubtarget().getRegisterInfo()->getCallPreservedMask(
           DAG.getMachineFunction(), CLI.CallConv);
@@ -362,6 +425,14 @@ SDValue CBCTargetLowering::LowerFormalArguments(
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, IsVarArg, MF, ArgLocs, *DAG.getContext());
   CCInfo.AnalyzeFormalArguments(Ins, CC_CBC);
+  if (!Ins.empty() && Ins[0].Flags.isSRet() &&
+      !MF.getFunction().hasStructRetAttr())
+    MF.getInfo<CBCMachineFunctionInfo>()->DemotedSRet = true;
+  if (rejectUnsupportedArgs(DAG, DL, Ins, "the parameters", "")) {
+    for (const ISD::InputArg &In : Ins)
+      InVals.push_back(DAG.getUNDEF(In.VT));
+    return Chain;
+  }
   for (unsigned I = 0; I != ArgLocs.size(); ++I) {
     CCValAssign &VA = ArgLocs[I];
     if (VA.isMemLoc()) {
@@ -571,8 +642,8 @@ MachineBasicBlock *CBCTargetLowering::EmitInstrWithCustomInserter(
         .addImm(F32 ? 1 : 0)
         .addMBB(TBB);
   } else {
-    // SELECT_GPR: ops are dest, cc, l, r, t, f, w32
-    bool W32 = Opc == CBC::SELECT_GPR && MI.getOperand(6).getImm() != 0;
+    // SELECT_GPR / SELECT_FPR_I: ops are dest, cc, l, r, t, f, w32
+    bool W32 = MI.getOperand(6).getImm() != 0; // SELECT_GPR and SELECT_FPR_I
     BuildMI(MBB, DL, TII.get(W32 ? CBC::BCC32 : CBC::BCC64))
         .addImm(MI.getOperand(1).getImm())
         .addReg(MI.getOperand(2).getReg())

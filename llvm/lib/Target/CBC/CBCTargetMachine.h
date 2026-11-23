@@ -11,6 +11,9 @@
 namespace llvm {
 struct CBCMachineFunctionInfo : public MachineFunctionInfo {
   unsigned MaxOutgoingSlots = 0;
+  /// The return value does not fit the result registers, so the function takes
+  /// a hidden `sret` pointer first that is not in its IR parameter list.
+  bool DemotedSRet = false;
   CBCMachineFunctionInfo(const Function &, const TargetSubtargetInfo *) {}
 };
 

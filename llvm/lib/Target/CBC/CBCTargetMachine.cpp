@@ -17,6 +17,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeCBCTarget() {
   PassRegistry &PR = *PassRegistry::getPassRegistry();
   initializeCBCDAGToDAGISelLegacyPass(PR);
   initializeCBCRejectUnsupportedIRLegacyPass(PR);
+  initializeCBCLowerByValLegacyPass(PR);
   initializeCBCLowerGlobalsLegacyPass(PR);
   initializeCBCSynthesizeEntryLegacyPass(PR);
   initializeCBCLowerSjLjLegacyPass(PR);
@@ -73,6 +74,9 @@ public:
   CBCPassConfig(CBCTargetMachine &TM, PassManagerBase &PM)
       : TargetPassConfig(TM, PM) {}
   void addIRPasses() override {
+    // Internal convention for byval parameters of CBC-only functions; whatever
+    // is left is rejected by CBCISelLowering.
+    addPass(createCBCLowerByValPass());
     // Before LowerGlobals so fp80 globals get a clean error, not image layout.
     addPass(createCBCRejectUnsupportedIRPass());
     addPass(createExpandVariadicsPass(ExpandVariadicsMode::Lowering));

@@ -103,6 +103,24 @@ compiler-barrier asm is lowered.
 
 ---
 
+## 3. Rejected by design (clean `LLVM ERROR`, link exits 1)
+
+After the call/frame/thunk ABI rebase the engine places arguments by the host C rules and cannot see aggregate
+layout. The backend therefore rejects, with a message that names the function (see
+`agents/13-engine-changes.md`):
+
+- **`byval` parameters** that survive `CBCLowerByVal`: that pass gives an internal convention (caller copies into an
+  alloca) only to functions that are defined in the program and only called directly. Still rejected: variadic
+  functions, address-taken functions (vtables, callbacks), default-visibility functions of a `cbc-wrap` shared
+  library, and calls to declarations (native callees keep the C ABI).
+- **`__int128` / split-`i128` parameters and returns** (`Flags.isSplit()`): the engine has no register-pair argument
+  placement.
+
+Not failures of the runner: the affected torture tests (about 16 `__int128`, 4 `byval`) show up as compile-time
+errors in `gcc-c-torture.log`.
+
+---
+
 ## Suggested decision list
 
 1. `long double` / fp80 / fp128 — implement, force 64-bit long double, or
