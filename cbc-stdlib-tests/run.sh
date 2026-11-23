@@ -28,9 +28,9 @@ if [[ -z "${CANGJIE_HOME:-}" ]]; then
   elif [[ -f /home/andrew/dev/hotfix-sdk/cangjie/envsetup.sh ]]; then
     # shellcheck disable=SC1091
     source /home/andrew/dev/hotfix-sdk/cangjie/envsetup.sh
-  elif [[ -f /home/user/Downloads/hotfix-sdk/cangjie/envsetup.sh ]]; then
+  elif [[ -f /home/user/dev/hotfix-sdk/cangjie/envsetup.sh ]]; then
     # shellcheck disable=SC1091
-    source /home/user/Downloads/hotfix-sdk/cangjie/envsetup.sh
+    source /home/user/dev/hotfix-sdk/cangjie/envsetup.sh
   fi
 fi
 if [[ -z "${CANGJIE_HOME:-}" ]]; then

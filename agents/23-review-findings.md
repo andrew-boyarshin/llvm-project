@@ -570,7 +570,7 @@ they are not re-reported:
 Common setup:
 
 ```bash
-source /home/user/Downloads/hotfix-sdk/cangjie/envsetup.sh        # provides `launcher`
+source /home/user/dev/hotfix-sdk/cangjie/envsetup.sh        # provides `launcher`
 CLANG=/home/user/dev/llvm-project-upstream/build-install/bin/clang
 T=--target=cbc_x86_64-unknown-linux-gnu
 $CLANG $T -O1 -w prog.c -o prog.cbc && launcher prog.cbc [args]    # use clang++ for C++
