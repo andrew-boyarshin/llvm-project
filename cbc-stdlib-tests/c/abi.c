@@ -55,6 +55,10 @@ int main(void) {
   CHECK(arr[0] == 1 && arr[1] == 3 && arr[2] == 5 && arr[3] == 7 && arr[4] == 9, "qsort callback %d %d %d", arr[0], arr[1], arr[2]);
   char buf[64]; snprintf(buf, sizeof buf, "%d %s %.2f %ld %ld %ld %ld", 42, "str", 3.14159, 1L, 2L, 3L, 4L);  /* varargs, stack */
   CHECK(strcmp(buf, "42 str 3.14 1 2 3 4") == 0, "snprintf '%s'", buf);
+  /* variadic native called through a function pointer (call.indirect with the variadic label) */
+  int (*volatile vp)(char *, const char *, ...) = sprintf;
+  vp(buf, "%d %.1f %d", 7, 2.5, 9);
+  CHECK(strcmp(buf, "7 2.5 9") == 0, "indirect sprintf '%s'", buf);
   char *m = alloca(100); strcpy(m, "alloca"); CHECK(strlen(m) == 6, "alloca");
   printf(fails ? "ABI FAILED (%d)\n" : "ABI OK\n", fails);
   return fails;
