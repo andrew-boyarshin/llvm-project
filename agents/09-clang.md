@@ -229,9 +229,9 @@ diagnosed.
 | Concern | Behaviour |
 |---|---|
 | default triple completion | `--target=cbc` (no sub-arch) → `cbc_<host arch>-<host os>-<host env>` |
-| sysroot | `--sysroot` or the host root; CBC runtime files under `<resource-dir>/cbc/<triple>/` |
-| C include order | clang resource headers → `<resource-dir>/cbc/include` (compat headers, §5.1) → host system headers (`/usr/include/<multiarch>` from the **host** triple: `x86_64-linux-gnu` / `aarch64-linux-gnu`, then `/usr/include`) |
-| C++ standard library | libc++ only: `<resource-dir>/cbc/<triple>/include/c++/v1` (headers configured for CBC: `_LIBCPP_HAS_NO_THREADS`, `_LIBCPP_HAS_NO_MONOTONIC_CLOCK` off, …). `-stdlib=libstdc++` is an error |
+| sysroot | `--sysroot` or the host root; CBC runtime files under `<prefix>/lib/cbc.<host triple>/` (see `14-libcxx.md` §13) |
+| C include order | clang resource headers → `<prefix>/include/cbc.<host triple>` (compat headers, §5.1) → host system headers (`/usr/include/<multiarch>` from the **host** triple: `x86_64-linux-gnu` / `aarch64-linux-gnu`, then `/usr/include`) |
+| C++ standard library | libc++ only: `<prefix>/include/cbc.<host triple>/c++/v1` then `<prefix>/include/c++/v1` (headers configured for CBC: `_LIBCPP_HAS_NO_THREADS`, `_LIBCPP_HAS_NO_MONOTONIC_CLOCK` off, …). `-stdlib=libstdc++` is an error |
 | object output | LLVM bitcode (`-c` implies `-flto=full`; `isUsingLTO()` returns true by default). `-fno-lto` with `-c` is an error (`separate code generation is not supported for the CBC target`): phase 2 is postponed indefinitely (`10-linker-and-runtime.md` §4) |
 | AArch64 flavour | `--target=cbc_aarch64-…` is accepted for preprocessing (`-E`, `-dM -E`) and `-fsyntax-only`; any compilation to bitcode or linking is an error until the follow-up flavour is implemented (`04-architecture.md` §2) |
 | `-S` | CBC assembly of the single TU (module-local mode, for inspection/tests) |
@@ -244,7 +244,7 @@ diagnosed.
 
 ```
 cbc-ld --target=<triple> -o a.cbc
-       <resource-dir>/cbc/<triple>/lib/crt-cbc.bc
+       <prefix>/lib/cbc.<host triple>/crt-cbc.bc
        <inputs: .o (bitcode), .a (bitcode archives)>
        [C++: -lc++ -lc++abi | else: cbc_can_catch_stub.bc] -lclang_rt.builtins
        --native-lib=c --native-lib=m [user -l<name> for names not found as CBC archives]
@@ -280,7 +280,7 @@ launcher: `cbc-run a.cbc args…`. For `lit` tests, `%cbc-run` substitutes the l
 
 ## 5. Headers
 
-### 5.1 Compat headers (`<resource-dir>/cbc/include`)
+### 5.1 Compat headers (`<prefix>/include/cbc.<host triple>`)
 
 Small wrappers that `#include_next` the host header and adjust what CBC cannot support:
 

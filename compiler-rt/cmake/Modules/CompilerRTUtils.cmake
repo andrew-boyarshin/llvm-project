@@ -515,7 +515,15 @@ function(filter_builtin_sources inout_var name)
 endfunction()
 
 function(get_compiler_rt_target arch variable)
-  if(COMPILER_RT_DEFAULT_TARGET_ONLY)
+  if("${arch}" STREQUAL "cbc")
+    # CBC runtimes live in their own per-flavor dir next to the native ones:
+    # lib/clang/<ver>/lib/cbc.<host-triple>/ (see clang ToolChains/CBC.h).
+    # The Android API level is not part of the directory name
+    # (aarch64-unknown-linux-android23 -> cbc.aarch64-unknown-linux-android).
+    string(REGEX REPLACE "(-android)[0-9]+$" "\\1" _cbc_triple
+           "${COMPILER_RT_DEFAULT_TARGET_TRIPLE}")
+    set(target "cbc.${_cbc_triple}")
+  elseif(COMPILER_RT_DEFAULT_TARGET_ONLY)
     # Use exact spelling when building only for the target specified to CMake.
     set(target "${COMPILER_RT_DEFAULT_TARGET_TRIPLE}")
   else()

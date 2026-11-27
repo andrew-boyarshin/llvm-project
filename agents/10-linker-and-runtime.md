@@ -574,17 +574,17 @@ layout, and the cmake guard that skips the `libgcc_s` probe are in `14-libcxx.md
 
 ## 8. Packaging
 
+`P` = `cbc.<host triple>`; the layout is specified in `14-libcxx.md` §13.
+
 ```
-<resource-dir>/cbc/
-  include/                         compat headers (09-clang.md §5.1)
-  cbc_x86_64-unknown-linux-gnu/
-    include/c++/v1/                libc++ headers (+ __config_site for CBC)
-    lib/crt-cbc.bc
-    lib/cbc_can_catch_stub.bc
-    lib/libclang_rt.builtins.a
-    lib/libc++.a  lib/libc++abi.a
-  cbc_aarch64-unknown-linux-gnu/   same layout — follow-up flavour, not shipped in the
-                                   current work scope (04-architecture.md §2)
+<prefix>/lib/clang/<ver>/lib/P/libclang_rt.builtins.a
+<prefix>/lib/P/    crt-cbc.bc  cbc_can_catch_stub.bc  libc++.a  libc++abi.a  native/libcbc-main.a
+<prefix>/include/c++/v1/        generic libc++ headers (shared with native builds)
+<prefix>/include/P/             unwind.h, bits/, compat headers (09-clang.md §5.1)
+<prefix>/include/P/c++/v1/      __config_site, module.modulemap
+P = cbc.x86_64-unknown-linux-gnu   current flavour
+P = cbc.aarch64-unknown-linux-gnu  follow-up flavour, not shipped in the current work scope
+                                   (04-architecture.md §2)
 ```
 
 ## 9. Debugging aids

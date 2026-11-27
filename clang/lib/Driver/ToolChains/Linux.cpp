@@ -227,7 +227,11 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
     : Generic_ELF(D, Triple, Args),
       CBCMode(Args.hasFlag(options::OPT_fcbc, options::OPT_fno_cbc, false)) {
   if (CBCMode) {
-    if (Triple.getArch() != llvm::Triple::x86_64 || !Triple.isOSLinux()) {
+    // x86-64 Linux, and AArch64 Android (agents/28; AArch64 glibc is deferred).
+    const bool Supported =
+        (Triple.getArch() == llvm::Triple::x86_64 && Triple.isOSLinux()) ||
+        (Triple.getArch() == llvm::Triple::aarch64 && Triple.isAndroid());
+    if (!Supported) {
       D.Diag(diag::err_drv_cbc_unsupported_target) << Triple.str();
       CBCMode = false;
     }
@@ -578,6 +582,12 @@ void Linux::addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
     // Dynsym APIs are opt-in (visibility("default")) for both DSO and PIE wrap.
     if (!DriverArgs.hasArg(options::OPT_fvisibility_EQ))
       CC1Args.push_back("-fvisibility=hidden");
+    // The CBC backend has no vector registers: keep __ARM_NEON undefined so
+    // code and headers take their scalar paths (agents/28 W2.1).
+    if (getTriple().isAArch64()) {
+      CC1Args.push_back("-target-feature");
+      CC1Args.push_back("-neon");
+    }
   }
   llvm::Triple Triple(ComputeEffectiveClangTriple(DriverArgs));
   if (Triple.isAArch64() && Triple.getEnvironment() == llvm::Triple::PAuthTest)
@@ -792,7 +802,8 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   // CBC empty-guard *intrin.h wrappers and floatn.h must win over system ones.
   if (CBCMode && !DriverArgs.hasArg(options::OPT_nobuiltininc)) {
     SmallString<256> Inc(D.Dir);
-    llvm::sys::path::append(Inc, "..", "lib", "cbc", "include");
+    llvm::sys::path::append(Inc, "..", "include",
+                            tools::cbc::getTargetDirName(getTriple()));
     addSystemInclude(DriverArgs, CC1Args, Inc);
   }
 
@@ -1035,11 +1046,18 @@ void Linux::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
     if (DriverArgs.hasArg(options::OPT_nostdinc, options::OPT_nostdincxx))
       return;
     GetCXXStdlibType(DriverArgs);
-    SmallString<256> Inc(getDriver().Dir);
-    llvm::sys::path::append(Inc, "..", "lib", "cbc", "include");
-    llvm::sys::path::append(Inc, "c++", "v1");
+    // Same order as native per-target libc++: target-specific headers
+    // (__config_site, module.modulemap) first, then the shared generic ones.
+    SmallString<256> TargetInc(getDriver().Dir);
+    llvm::sys::path::append(TargetInc, "..", "include",
+                            tools::cbc::getTargetDirName(getTriple()));
+    llvm::sys::path::append(TargetInc, "c++", "v1");
     CC1Args.push_back("-internal-isystem");
-    CC1Args.push_back(DriverArgs.MakeArgString(Inc));
+    CC1Args.push_back(DriverArgs.MakeArgString(TargetInc));
+    SmallString<256> GenericInc(getDriver().Dir);
+    llvm::sys::path::append(GenericInc, "..", "include", "c++", "v1");
+    CC1Args.push_back("-internal-isystem");
+    CC1Args.push_back(DriverArgs.MakeArgString(GenericInc));
     return;
   }
   Generic_GCC::AddClangCXXStdlibIncludeArgs(DriverArgs, CC1Args);

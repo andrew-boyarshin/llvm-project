@@ -121,7 +121,7 @@ binary contains. They do not change the triple of `LLVM_ENABLE_RUNTIMES`. That
 sub-build compiles a native libc++ for the default triple, with the just-built
 clang, and installs it under the host per-target runtime directory. The CBC
 toolchain never searches that directory (`09-clang.md` §4.1 looks in
-`<resource-dir>/cbc/<triple>/`).
+`<prefix>/lib/cbc.<host triple>/`).
 
 The error is the default at `libcxxabi/CMakeLists.txt:63-66`:
 
@@ -399,7 +399,7 @@ into the engine except through `__cbc_raise`.
 
 ### 7.1 The header
 
-Ship one `unwind.h` under `<resource-dir>/cbc/include`, before the host
+Ship one `unwind.h` under `<prefix>/include/cbc.<host triple>`, before the host
 include path. `libcxxabi/src/cxa_exception.h` includes `"unwind.h"` and does
 not include `unwind_itanium.h`; a second header is unused. A CBC compilation
 of libc++abi must see this file and not the host's, which pulls
@@ -564,7 +564,7 @@ libc++'s `exception_ptr` header calls `__cxa_allocate_exception` and
 `__config_site` is generated from these options (`libcxx/CMakeLists.txt`
 `config_define` block, around the `_LIBCPP_HAS_THREADS` line). The CBC clang
 must include that generated header with the rest of
-`<resource-dir>/cbc/<triple>/include/c++/v1`, ahead of any host
+`<prefix>/include/cbc.<host triple>/c++/v1` then `<prefix>/include/c++/v1`, ahead of any host
 `/usr/include/c++`. A host libc++ header set defines host `long double`, host
 threading, and occasionally inline asm; the CBC target rejects inline asm
 (`09-clang.md` §3.3).
@@ -802,18 +802,30 @@ no libunwind in the list) or records `-lgcc_s` (off unwinder, probe succeeds).
 Do not pass `-DLIBCXXABI_USE_LLVM_UNWINDER=ON` and add a CBC libunwind. There
 is nothing for that library to walk.
 
-Install layout (`10` §8 matches this):
+Install layout (`10` §8 matches this). `P` = `cbc.<host triple>` (for example
+`cbc.x86_64-unknown-linux-gnu`); it mirrors the native per-target runtime layout,
+and the `cbc.` prefix keeps CBC apart from native runtimes in the same prefix:
 
 ```
-<resource-dir>/cbc/include/                         unwind.h (CBC), compat C headers
-<resource-dir>/cbc/cbc_x86_64-unknown-linux-gnu/
-    include/c++/v1/                                 libc++ headers + generated __config_site
-    lib/crt-cbc.bc
-    lib/cbc_can_catch_stub.bc
-    lib/libclang_rt.builtins.a
-    lib/libc++.a
-    lib/libc++abi.a
+<prefix>/lib/clang/<ver>/lib/P/libclang_rt.builtins.a   compiler-rt builtins
+<prefix>/lib/P/libc++.a  libc++abi.a                    libc++, libc++abi (bitcode)
+<prefix>/lib/P/crt-cbc.bc  cbc_can_catch_stub.bc        crt, from the compiler install
+<prefix>/lib/P/native/libcbc-main.a                     host-side PIE main (compiler install)
+<prefix>/include/c++/v1/                                generic libc++ headers, SHARED with native builds
+<prefix>/include/P/c++/v1/                              __config_site, module.modulemap (target-specific)
+<prefix>/include/P/                                     unwind.h, bits/floatn.h, compat C headers
 ```
+
+The generic headers are identical for CBC and native builds (CBC differences are
+guarded by `__CBC__`); the only option-dependent shared file is
+`include/c++/v1/__assertion_handler`. `configure-runtimes.sh` pins
+`LIBCXX_HARDENING_MODE`, `LIBCXX_ASSERTION_SEMANTIC` and
+`LIBCXX_ASSERTION_HANDLER_FILE` to libc++'s defaults, and `build.sh` fails if the
+installed `__assertion_handler` differs from `libcxx/vendor/llvm/default_assertion_handler.in`.
+The driver adds `include/P/c++/v1` first, then `include/c++/v1`.
+`LLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON`; the install dirs are overridden because the
+real compile triple stays the host triple (CBC is host triple + `-fcbc`), and
+`get_compiler_rt_target` maps arch `cbc` to `cbc.<triple>`.
 
 `crt-cbc.bc` and the stub are built with the crt, not by the runtimes cmake.
 They are installed beside the archives that cmake produces. The stub is the

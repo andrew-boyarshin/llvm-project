@@ -102,7 +102,7 @@ def err_drv_cbc_not_an_arch : Error<
   "CBC is not a clang architecture; use "
   "'--target=x86_64-unknown-linux-gnu -fcbc'">;
 def err_drv_cbc_unsupported_target : Error<
-  "-fcbc is only supported for x86_64 Linux in this stage "
+  "-fcbc is only supported for x86_64 Linux and AArch64 Android in this stage "
   "(got '%0')">;
 def err_drv_cbc_fopenmp : Error<
   "OpenMP is not supported with -fcbc">;

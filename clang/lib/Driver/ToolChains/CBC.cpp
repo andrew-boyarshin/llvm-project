@@ -13,6 +13,16 @@ using namespace clang::driver::tools;
 using namespace clang;
 using namespace llvm::opt;
 
+std::string cbc::getTargetDirName(const llvm::Triple &T) {
+  // Only the Android AArch64 flavour is planned (agents/28); the glibc name is
+  // kept so a later AArch64 Linux flavour needs no renaming. The Android API
+  // level is deliberately not part of the name.
+  if (T.getArch() == llvm::Triple::aarch64 || T.isCBCHostAArch64())
+    return T.isAndroid() ? "cbc.aarch64-unknown-linux-android"
+                         : "cbc.aarch64-unknown-linux-gnu";
+  return "cbc.x86_64-unknown-linux-gnu";
+}
+
 void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
                                const InputInfo &Output,
                                const InputInfoList &Inputs, const ArgList &Args,
@@ -25,16 +35,17 @@ void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());
 
+  const std::string TargetDir = cbc::getTargetDirName(getToolChain().getTriple());
   SmallString<256> Crt(getToolChain().getDriver().Dir);
-  llvm::sys::path::append(Crt, "..", "lib", "cbc", "crt-cbc.bc");
+  llvm::sys::path::append(Crt, "..", "lib", TargetDir, "crt-cbc.bc");
   CmdArgs.push_back("--crt");
   CmdArgs.push_back(Args.MakeArgString(Crt));
   CmdArgs.push_back("--no-native-validation");
 
   SmallString<256> CbcLib(getToolChain().getDriver().Dir);
-  llvm::sys::path::append(CbcLib, "..", "lib", "cbc");
+  llvm::sys::path::append(CbcLib, "..", "lib", TargetDir);
+  // libc++.a / libc++abi.a live directly in lib/<TargetDir>.
   SmallString<256> LibDir(CbcLib);
-  llvm::sys::path::append(LibDir, "lib");
   SmallString<256> NativeDir(CbcLib);
   llvm::sys::path::append(NativeDir, "native");
   // -L before -l: ELF lld resolves libraries in argv order. CBC lib first
@@ -61,7 +72,8 @@ void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (TT.getArch() == llvm::Triple::x86_64 || TT.isCBCHostX86_64())
     RuntimeSubdir = "linux_x86_64_cjnative";
   else if (TT.getArch() == llvm::Triple::aarch64 || TT.isCBCHostAArch64())
-    RuntimeSubdir = "linux_aarch64_cjnative";
+    RuntimeSubdir =
+        TT.isAndroid() ? "linux_android_aarch64_cjnative" : "linux_aarch64_cjnative";
   if (RuntimeSubdir) {
     SmallString<256> RuntimeLib(*CjHome);
     llvm::sys::path::append(RuntimeLib, "runtime", "lib", RuntimeSubdir);
@@ -81,8 +93,10 @@ void cbc::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     llvm::sys::path::append(Stub, "cbc_can_catch_stub.bc");
     CmdArgs.push_back(Args.MakeArgString(Stub));
   }
-  SmallString<256> Builtins(LibDir);
-  llvm::sys::path::append(Builtins, "libclang_rt.builtins-cbc.a");
+  // compiler-rt builtins use the per-target resource layout:
+  // <resource-dir>/lib/<TargetDir>/libclang_rt.builtins.a
+  SmallString<256> Builtins(getToolChain().getDriver().ResourceDir);
+  llvm::sys::path::append(Builtins, "lib", TargetDir, "libclang_rt.builtins.a");
   CmdArgs.push_back(Args.MakeArgString(Builtins));
 
   // Do not call gnutools::Linker::ConstructJob (crt1.o, -dynamic-linker, -lc).

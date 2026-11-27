@@ -504,7 +504,7 @@ for dir in searchPaths:
 CBC library directory **must be first** on the clang link line, before
 host `/usr/lib/…`:
 
-* `-lc++` → `<resource>/lib/cbc/lib/libc++.a` (bitcode). That directory
+* `-lc++` → `<prefix>/lib/cbc.<host triple>/libc++.a` (bitcode). That directory
   has no `libc++.so`, so the `.a` is chosen without looking at later
   dirs.
 * `-lncurses` → CBC dir has nothing → host `libncurses.so` (script).
@@ -631,7 +631,7 @@ Changes relative to today:
 | | first arg `--cbc` |
 | `--crt crt-cbc.bc` | unchanged |
 | `--no-native-validation` | unchanged |
-| `-L <resource>/lib/cbc/lib` | **first** `-L` |
+| `-L <prefix>/lib/cbc.<host triple>` | **first** `-L` |
 | | then `ToolChain.AddFilePathLibArgs` (host `/usr/lib`, multiarch, sysroot) so `-lncurses` resolves |
 | user inputs via `AddLinkerInputs` | unchanged (`-l`, `.o` bitcode, `.a`) |
 | `-lc++ -lc++abi` or catch stub; builtins `.a` | unchanged |
@@ -663,7 +663,7 @@ hack in `DriverDispatcher.cpp`.
 * Keep building and installing `crt-cbc.bc`, `cbc_can_catch_stub.bc`, and
   the compat headers. That CMake can stay in `llvm/tools/cbc-ld/` as a
   non-tool target, or move next to the backend; the install layout
-  (`lib/cbc/…`) does not change.
+  (`lib/cbc.<host triple>/…`, `include/cbc.<host triple>/…`) is per flavour; see `14-libcxx.md` §13.
 * Clang and any in-tree tests that named `cbc-ld` call `ld.lld --cbc`
   instead. No compatibility binary.
 
