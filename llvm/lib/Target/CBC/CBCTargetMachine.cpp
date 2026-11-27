@@ -29,8 +29,10 @@ static Reloc::Model getReloc(std::optional<Reloc::Model> RM) {
 }
 
 static bool isSupportedCBCTriple(const Triple &TT) {
-  // Host-triple bitcode (-fcbc) or legacy cbc_x86_64-* private triples.
-  return TT.isCBCHostX86_64() || TT.getArch() == Triple::x86_64;
+  // Host-triple bitcode (-fcbc) or legacy cbc_<arch>-* private triples.
+  // AArch64: the Android flavour (agents/28); the backend itself is OS-neutral.
+  return TT.isCBCHostX86_64() || TT.getArch() == Triple::x86_64 ||
+         TT.isCBCHostAArch64() || TT.getArch() == Triple::aarch64;
 }
 
 /// Keep the host arch/OS/ABI for data layout, but force CBC object format so
@@ -53,7 +55,7 @@ CBCTargetMachine::CBCTargetMachine(
       TLOF(new CBCTargetObjectFile()) {
   if (!isSupportedCBCTriple(TT))
     report_fatal_error(
-        "the AArch64 flavour of the CBC target is not implemented yet");
+        "unsupported CBC host flavour (supported: x86_64, aarch64)");
   initAsmInfo();
 }
 

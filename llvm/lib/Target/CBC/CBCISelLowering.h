@@ -7,6 +7,10 @@
 namespace llvm {
 class CBCSubtarget;
 class CBCTargetLowering : public TargetLowering {
+  /// Host flavour (agents/28): selects argument registers and the tail register.
+  bool IsAArch64;
+  unsigned TailReg;
+
 public:
   CBCTargetLowering(const TargetMachine &TM, const CBCSubtarget &STI);
   const char *getTargetNodeName(unsigned Opcode) const override {

@@ -543,17 +543,20 @@ public:
         }
       }
     }
+    const bool IsAArch64 = MF.getSubtarget<CBCSubtarget>().isAArch64();
     for (const MachineBasicBlock &B : MF) {
       for (const MachineInstr &MI : B) {
         for (const MachineOperand &MO : MI.operands()) {
           if (!MO.isReg())
             continue;
           Register R = MO.getReg();
-          if (R == CBC::IR8)
+          // AArch64 flavour: IR8..IR10 are volatile (argument and tail
+          // registers), only IR11..IR13 are callee-saved (engine IR_VOLATILES).
+          if (R == CBC::IR8 && !IsAArch64)
             M.IMask |= 1 << 0;
-          else if (R == CBC::IR9)
+          else if (R == CBC::IR9 && !IsAArch64)
             M.IMask |= 1 << 1;
-          else if (R == CBC::IR10)
+          else if (R == CBC::IR10 && !IsAArch64)
             M.IMask |= 1 << 2;
           else if (R == CBC::IR11)
             M.IMask |= 1 << 3;

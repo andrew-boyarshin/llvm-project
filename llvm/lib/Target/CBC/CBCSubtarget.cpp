@@ -1,4 +1,5 @@
 #include "CBCSubtarget.h"
+#include "CBC.h"
 #include "llvm/Analysis/LibcallLoweringInfo.h"
 #include "llvm/IR/RuntimeLibcalls.h"
 
@@ -11,6 +12,10 @@ CBCSubtarget::CBCSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
                            const TargetMachine &TM)
     : CBCGenSubtargetInfo(TT, CPU, /*TuneCPU=*/CPU, FS), TT(TT), InstrInfo(*this),
       FrameLowering(), TLInfo(TM, *this) {}
+
+unsigned CBCSubtarget::getTailReg() const {
+  return isAArch64() ? CBC::IR10 : CBC::IR7;
+}
 
 void CBCSubtarget::initLibcallLoweringInfo(LibcallLoweringInfo &Info) const {
   // The CBC triple is not in the default runtime-libcall set, so float

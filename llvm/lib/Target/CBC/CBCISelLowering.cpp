@@ -23,7 +23,8 @@ using namespace llvm;
 
 CBCTargetLowering::CBCTargetLowering(const TargetMachine &TM,
                                      const CBCSubtarget &STI)
-    : TargetLowering(TM, STI) {
+    : TargetLowering(TM, STI), IsAArch64(STI.isAArch64()),
+      TailReg(STI.getTailReg()) {
   addRegisterClass(MVT::i32, &CBC::GPRRegClass);
   addRegisterClass(MVT::i64, &CBC::GPRRegClass);
   addRegisterClass(MVT::f32, &CBC::FPRRegClass);
@@ -255,7 +256,7 @@ SDValue CBCTargetLowering::LowerCall(CallLoweringInfo &CLI,
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CLI.CallConv, CLI.IsVarArg, DAG.getMachineFunction(), ArgLocs,
                  *DAG.getContext());
-  CCInfo.AnalyzeCallOperands(CLI.Outs, CC_CBC);
+  CCInfo.AnalyzeCallOperands(CLI.Outs, IsAArch64 ? CC_CBC_A64 : CC_CBC_X64);
 
   SDValue Chain = CLI.Chain;
   SDValue Glue;
@@ -395,8 +396,8 @@ void CBCTargetLowering::AdjustInstrPostInstrSelection(MachineInstr &MI,
       MI.getNumOperands() < 2 || !MI.getOperand(1).isImm())
     return;
   unsigned N = MI.getOperand(1).getImm();
-  static const MCPhysReg IRegs[] = {CBC::IR1, CBC::IR2, CBC::IR3,
-                                    CBC::IR4, CBC::IR5, CBC::IR6};
+  static const MCPhysReg IRegs[] = {CBC::IR1, CBC::IR2, CBC::IR3, CBC::IR4,
+                                    CBC::IR5, CBC::IR6, CBC::IR7, CBC::IR8};
   static const MCPhysReg FRegs[] = {CBC::FR0, CBC::FR1, CBC::FR2, CBC::FR3,
                                     CBC::FR4, CBC::FR5, CBC::FR6, CBC::FR7};
   unsigned IReg = 0, FReg = 0;
@@ -424,7 +425,7 @@ SDValue CBCTargetLowering::LowerFormalArguments(
   MachineFunction &MF = DAG.getMachineFunction();
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, IsVarArg, MF, ArgLocs, *DAG.getContext());
-  CCInfo.AnalyzeFormalArguments(Ins, CC_CBC);
+  CCInfo.AnalyzeFormalArguments(Ins, IsAArch64 ? CC_CBC_A64 : CC_CBC_X64);
   if (!Ins.empty() && Ins[0].Flags.isSRet() &&
       !MF.getFunction().hasStructRetAttr())
     MF.getInfo<CBCMachineFunctionInfo>()->DemotedSRet = true;
@@ -436,10 +437,10 @@ SDValue CBCTargetLowering::LowerFormalArguments(
   for (unsigned I = 0; I != ArgLocs.size(); ++I) {
     CCValAssign &VA = ArgLocs[I];
     if (VA.isMemLoc()) {
-      if (!MF.front().isLiveIn(CBC::IR7))
-        MF.front().addLiveIn(CBC::IR7);
+      if (!MF.front().isLiveIn(TailReg))
+        MF.front().addLiveIn(TailReg);
       unsigned Off = VA.getLocMemOffset();
-      SDValue Ops[] = {DAG.getRegister(CBC::IR7, MVT::i64),
+      SDValue Ops[] = {DAG.getRegister(TailReg, MVT::i64),
                        DAG.getTargetConstant(Off, DL, MVT::i64), Chain};
       SDNode *Ld =
           DAG.getMachineNode(CBC::LDRAW64, DL, MVT::i64, MVT::Other, Ops);

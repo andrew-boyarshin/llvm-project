@@ -55,6 +55,7 @@
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Demangle/Demangle.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
@@ -368,10 +369,14 @@ bool ExpandVariadics::runOnModule(Module &M) {
 
   Triple TT(M.getTargetTriple());
   ABI = VariadicABIInfo::create(TT);
-  // After -fcbc the module triple is the host (x86_64); select CBC va_arg
-  // lowering from the !"CBC" module flag (or a leftover Triple::cbc).
+  // After -fcbc the module triple is the host (x86_64 or aarch64); select CBC
+  // va_arg lowering from the !"CBC" module flag (or a leftover Triple::cbc).
+  // aarch64 has no ABI of its own above, so the flavour comes from the arch.
   if (!ABI && (TT.isCBC() || M.getModuleFlag(CBCModuleFlagKey)))
-    ABI = VariadicABIInfo::create(Triple("cbc-unknown-unknown"));
+    ABI = VariadicABIInfo::create(
+        Triple(TT.getArch() == Triple::aarch64 || TT.isCBCHostAArch64()
+                   ? "cbc_aarch64-unknown-unknown"
+                   : "cbc-unknown-unknown"));
   if (!ABI)
     return Changed;
 
@@ -1288,6 +1293,71 @@ struct CBC final : public VariadicABIInfo {
   }
 };
 
+// AArch64 (AAPCS64, Linux/Android) flavour of CBC. va_list is
+//   { ptr __stack, ptr __gr_top, ptr __vr_top, i32 __gr_offs, i32 __vr_offs }
+// and clang's inline va_arg takes the "on stack" path whenever the offsets are
+// non-negative. A CBC variadic call packs every variadic argument into one
+// buffer laid out like the AAPCS64 stack-argument area (slots of 8 bytes, 16
+// for 16-byte aligned types), so setting __gr_offs = __vr_offs = 0 and
+// __stack = buffer makes every va_arg read the buffer (agents/04 section 10).
+struct CBCAArch64 final : public VariadicABIInfo {
+  bool enableForTarget() override { return true; }
+
+  bool vaListPassedInSSARegister() override { return false; }
+
+  Type *vaListType(LLVMContext &Ctx) override {
+    Type *Ptr = PointerType::getUnqual(Ctx);
+    Type *I32 = Type::getInt32Ty(Ctx);
+    return StructType::get(Ctx, {Ptr, Ptr, Ptr, I32, I32});
+  }
+
+  Type *vaListParameterType(Module &M) override {
+    return PointerType::getUnqual(M.getContext());
+  }
+
+  Value *initializeVaList(Module &M, LLVMContext &Ctx, IRBuilder<> &Builder,
+                          AllocaInst *VaList, Value *Buffer) override {
+    Type *Ty = VaList->getAllocatedType();
+    auto Field = [&](unsigned Idx) {
+      return Builder.CreateConstInBoundsGEP2_32(Ty, VaList, 0, Idx);
+    };
+    Value *Null = ConstantPointerNull::get(PointerType::getUnqual(Ctx));
+    Builder.CreateStore(Buffer, Field(0));              // __stack
+    Builder.CreateStore(Null, Field(1));                // __gr_top
+    Builder.CreateStore(Null, Field(2));                // __vr_top
+    Builder.CreateStore(Builder.getInt32(0), Field(3)); // __gr_offs
+    Builder.CreateStore(Builder.getInt32(0), Field(4)); // __vr_offs
+    return VaList;
+  }
+
+  VAArgSlotInfo slotInfo(const DataLayout &DL, Type *Parameter) override {
+    Align A = DL.getABITypeAlign(Parameter);
+    if (A < Align(8))
+      A = Align(8);
+    if (A > Align(16))
+      A = Align(16);
+    // Composites larger than 16 bytes are passed by reference, except
+    // homogeneous floating-point aggregates (at most four members).
+    bool Indirect = false;
+    if (auto *S = dyn_cast<StructType>(Parameter)) {
+      if (DL.getTypeAllocSize(S).getFixedValue() > 16) {
+        bool HFA = S->getNumElements() >= 1 && S->getNumElements() <= 4 &&
+                   S->getElementType(0)->isFloatingPointTy();
+        for (Type *E : S->elements())
+          HFA &= E == S->getElementType(0);
+        Indirect = !HFA;
+      }
+    }
+    return {A, Indirect};
+  }
+
+  bool ignoreFunction(const Function *F) override {
+    // Declarations are native functions and keep the host variadic convention
+    // (AAPCS64 passes their variadic arguments like named ones).
+    return !F || F->isDeclaration();
+  }
+};
+
 struct Wasm final : public VariadicABIInfo {
 
   bool enableForTarget() override {
@@ -1350,6 +1420,8 @@ std::unique_ptr<VariadicABIInfo> VariadicABIInfo::create(const Triple &T) {
   }
 
   case Triple::cbc:
+    if (T.getSubArch() == Triple::CBCSubArch_aarch64)
+      return std::make_unique<CBCAArch64>();
     return std::make_unique<CBC>();
 
   default:

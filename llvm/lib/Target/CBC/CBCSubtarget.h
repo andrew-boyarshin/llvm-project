@@ -36,6 +36,12 @@ public:
   bool isX86_64() const {
     return TT.isCBCHostX86_64() || TT.getArch() == Triple::x86_64;
   }
+  bool isAArch64() const {
+    return TT.isCBCHostAArch64() || TT.getArch() == Triple::aarch64;
+  }
+  /// Register holding the caller's outgoing stack-argument area on entry
+  /// (engine PlatformTraits::TR: x86-64 IR7, AArch64 IR10).
+  unsigned getTailReg() const;
   bool enableIndirectBrExpand() const override { return true; }
 };
 } // namespace llvm
